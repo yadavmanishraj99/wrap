@@ -505,12 +505,14 @@ fn nav_divider() -> KeyedView {
     )
 }
 
-/// One pinned item as a nav row: 28px art + title only (no
-/// subtitle), in a Border so the whole row is clickable. A pinned
-/// item is a shortcut, not a page — `selects_on_invoked(false)` so
-/// clicking it never changes the nav selection; the Border's pointer
-/// press opens/plays it instead. A pinned song plays on click; any
-/// other kind opens its details page.
+/// One pinned item as a nav row: 48px art (the same size as the
+/// song-row art in the details views) + title only (no subtitle),
+/// in a Border so the whole row is clickable. The 48px art makes
+/// the row taller than a plain nav item. A pinned item is a shortcut,
+/// not a page — `selects_on_invoked(false)` so clicking it never
+/// changes the nav selection; the Border's pointer press opens/plays
+/// it instead. A pinned song plays on click; any other kind opens
+/// its details page.
 fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> KeyedView {
     let item = pinned.clone();
     let message = if item.kind == "song" {
@@ -525,10 +527,20 @@ fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> Key
         })
     };
     let art: View = match &item.art {
-        Some(url) => views::image_from_url(url).width(28.0).height(28.0).into(),
+        Some(url) => Border::new()
+            .width(48.0)
+            .height(48.0)
+            .corner_radius(CornerRadius::uniform(4.0))
+            .content(
+                views::image_from_url(url)
+                    .width(48.0)
+                    .height(48.0)
+                    .stretch(Stretch::UniformToFill),
+            ),
         None => Border::new()
-            .width(28.0)
-            .height(28.0)
+            .width(48.0)
+            .height(48.0)
+            .corner_radius(CornerRadius::uniform(4.0))
             .background(Brush::Theme(ThemeBrush::CardBackground))
             .content(
                 SymbolIcon::new()
@@ -1815,7 +1827,7 @@ impl Shell {
                     Some(url) => Border::new()
                         .width(308.0)
                         .height(308.0)
-                        .corner_radius(CornerRadius::uniform(8.0))
+                        .corner_radius(CornerRadius::uniform(4.0))
                         .content(
                             views::image_from_url(&url)
                                 .width(308.0)
@@ -1825,7 +1837,7 @@ impl Shell {
                     None => Border::new()
                         .width(308.0)
                         .height(308.0)
-                        .corner_radius(CornerRadius::uniform(8.0))
+                        .corner_radius(CornerRadius::uniform(4.0))
                         .background(Brush::Theme(ThemeBrush::SolidBackground))
                         .content(
                             SymbolIcon::new()

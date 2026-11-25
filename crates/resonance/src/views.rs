@@ -368,15 +368,21 @@ pub fn song_row(
         .unwrap_or_default();
 
     let art_view: View = match art_url(&song.image, "150x150") {
-        Some(url) => image_from_url(&url)
+        Some(url) => Border::new()
             .width(48.0)
             .height(48.0)
-            .stretch(Stretch::UniformToFill)
+            .corner_radius(CornerRadius::uniform(4.0))
             .grid_column(0)
-            .into(),
+            .content(
+                image_from_url(&url)
+                    .width(48.0)
+                    .height(48.0)
+                    .stretch(Stretch::UniformToFill),
+            ),
         None => Border::new()
             .width(48.0)
             .height(48.0)
+            .corner_radius(CornerRadius::uniform(4.0))
             .grid_column(0)
             .content(
                 SymbolIcon::new()

@@ -135,8 +135,13 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 - **Pinning** — any song, artist, album, playlist, or chart can be
   pinned from its card's context menu (Pin / Unpin). Pinned items
   appear in the sidebar below a divider after Library, in pin order,
-  each as a row with its art (28px) + title only (no subtitle), the
-  title at 14px, the same size as the nav items. They persist
+  each as a row with its art (48px, the same size as the song-row art
+  in the details views) + title only (no subtitle), the
+  title at 14px, the same size as the nav items. The 48px art makes
+  the pinned rows taller than a plain nav item. Every square art in
+  the app has 4px rounded corners (pinned art, song-row art, details
+  header art, media-card art, Now Playing art); artist avatars stay
+  circular. They persist
   in `library.json`. A pinned row is a shortcut, not a page: clicking
   it never changes the nav selection. A pinned song plays on click
   (its full Song is fetched by id first); any other pinned item opens
