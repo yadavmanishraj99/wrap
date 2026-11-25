@@ -577,6 +577,15 @@ fn pinned_nav_item(
     } else {
         Message::PlayByKind(item.kind.clone(), item.id.clone())
     };
+    // The context-menu target for this pinned item (right-click, or
+    // the player bar's More button when it is a song).
+    let menu_target = DetailsTarget {
+        kind: item.kind.clone(),
+        id: item.id.clone(),
+        title: item.title.clone(),
+        subtitle: item.subtitle.clone(),
+        art: item.art.clone(),
+    };
     // Artist art is a full circle; every other kind is a 4px
     // rounded square.
     let art_radius = if item.kind == "artist" { 24.0 } else { 4.0 };
@@ -627,11 +636,14 @@ fn pinned_nav_item(
         .spacing(2.0)
         .vertical_alignment(VerticalAlignment::Center)
         .keyed_children(text_children);
+    let row_menu_target = menu_target.clone();
     let row = Border::new()
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .background(Brush::Solid(Color::transparent()))
         .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
-            if info.is_left_button_pressed {
+            if info.is_right_button_pressed {
+                Message::OpenMenu(row_menu_target.clone(), info.window_x, info.window_y)
+            } else if info.is_left_button_pressed {
                 message.clone()
             } else {
                 Message::Noop
@@ -646,6 +658,10 @@ fn pinned_nav_item(
         );
     let mut content_children: Vec<KeyedView> = vec![KeyedView::new("row", row)];
     if hovered {
+        // The play icon is a sibling of the row, not a child, so a
+        // right-click on it never reaches the row's handler — it
+        // opens the context menu itself. Left-click plays the item.
+        let play_menu_target = menu_target.clone();
         content_children.push(KeyedView::new(
             "play",
             Border::new()
@@ -658,9 +674,15 @@ fn pinned_nav_item(
                 .horizontal_alignment(HorizontalAlignment::Left)
                 .vertical_alignment(VerticalAlignment::Center)
                 .margin(Thickness::new(8.0, 0.0, 0.0, 0.0))
-                .on_pointer_pressed(
-                    context.callback(move |_info: PointerEventInfo| play_message.clone()),
-                )
+                .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                    if info.is_right_button_pressed {
+                        Message::OpenMenu(play_menu_target.clone(), info.window_x, info.window_y)
+                    } else if info.is_left_button_pressed {
+                        play_message.clone()
+                    } else {
+                        Message::Noop
+                    }
+                }))
                 .content(SymbolIcon::new().symbol(Symbol::Play)),
         ));
     }
@@ -1902,7 +1924,51 @@ impl Shell {
                     )),
             ));
 
-        // --- Right: now playing, mute + volume. ---
+        // --- Right: now playing, mute + volume, and a More button
+        // at the far right that opens the context menu for the song
+        // now playing. A plain icon button cannot carry the click
+        // position, so this is a Border with a press handler (like
+        // the details action row's More button), not a
+        // bar_icon_button. Inert while nothing is playing.
+        let more_button: View = match &current {
+            Some(song) => {
+                let target = DetailsTarget {
+                    kind: "song".to_string(),
+                    id: song.id.clone(),
+                    title: song.name.clone(),
+                    subtitle: views::artist_names(song),
+                    art: views::art_url(&song.image, "500x500"),
+                };
+                Border::new()
+                    .width(32.0)
+                    .height(32.0)
+                    .background(Brush::Solid(Color::transparent()))
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                        Message::OpenMenu(target.clone(), info.window_x, info.window_y)
+                    }))
+                    .content(
+                        SymbolIcon::new()
+                            .symbol(Symbol::More)
+                            .horizontal_alignment(HorizontalAlignment::Center)
+                            .vertical_alignment(VerticalAlignment::Center),
+                    )
+                    .tooltip("More")
+            }
+            None => Border::new()
+                .width(32.0)
+                .height(32.0)
+                .background(Brush::Solid(Color::transparent()))
+                .opacity(0.4)
+                .vertical_alignment(VerticalAlignment::Center)
+                .content(
+                    SymbolIcon::new()
+                        .symbol(Symbol::More)
+                        .horizontal_alignment(HorizontalAlignment::Center)
+                        .vertical_alignment(VerticalAlignment::Center),
+                )
+                .tooltip("More"),
+        };
         let right = StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(4.0)
@@ -1941,6 +2007,7 @@ impl Shell {
                     .vertical_alignment(VerticalAlignment::Center)
                     .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value)))
                     .tooltip("Volume"),
+                more_button,
             ));
 
         Grid::new()

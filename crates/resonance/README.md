@@ -158,18 +158,21 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 - **Window material** — Acrylic (default, frosted glass), Mica, Mica Alt, or Solid,
   switchable in Settings → Window material; persisted in settings.
 - **Context menu** — right-click (or the hover more button) on any
-  Home card: Play, Play next (queues right after the current song,
-  or starts playing when nothing is), Properties (title, type,
-  duration/year/album or song count in a dialog), Pin / Unpin (pins
-  the item to the sidebar, or removes it). This is a custom
-  overlay (a Border in the shell's overlay layer), not a native
-  WinUI MenuFlyout/ContentDialog — Reactor 0.100 does expose a
-  native `Menu` and `ContentDialog`, but the native menu only opens
-  on right-click (it cannot be opened from the More button), and
-  the native dialog has no content setter, so it cannot show the
-  Properties details. The custom menu and dialog are opaque (a
-  solid fill), never translucent. Pointer events exist only on
-  `Border` in windows-reactor 0.100, so every press/hover handler
+  Home card, any song row, or any pinned sidebar row: Play, Play
+  next (queues right after the current song, or starts playing when
+  nothing is), Properties (title, type, duration/year/album or song
+  count in a dialog), Pin / Unpin (pins the item to the sidebar, or
+  removes it). The bottom player bar has a More button at its far
+  right that opens the same menu for the song now playing (inert
+  while nothing is playing). This is a custom overlay (a Border in
+  the shell's overlay layer), not a native WinUI MenuFlyout/
+  ContentDialog — Reactor 0.100 does expose a native `Menu` and
+  `ContentDialog`, but the native menu only opens on right-click (it
+  cannot be opened from the More button), and the native dialog has
+  no content setter, so it cannot show the Properties details. The
+  custom menu and dialog are opaque (a solid fill), never
+  translucent. Pointer events exist only on `Border` in
+  windows-reactor 0.100, so every press/hover handler
   sits on a Border and the menu's click-away layer is a sibling of
   the menu, never its parent.
 - **Pinning** — any song, artist, album, playlist, or chart can be

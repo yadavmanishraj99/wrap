@@ -271,8 +271,15 @@ pub fn media_card(
             hover_button(
                 Symbol::Play,
                 HorizontalAlignment::Left,
-                move |_info: PointerEventInfo| {
-                    Message::PlayByKind(play_target.kind.clone(), play_target.id.clone())
+                move |info: PointerEventInfo| {
+                    // Left-click only: a right-click must not start
+                    // playback — it falls through to the card art's
+                    // press handler, which opens the context menu.
+                    if info.is_left_button_pressed {
+                        Message::PlayByKind(play_target.kind.clone(), play_target.id.clone())
+                    } else {
+                        Message::Noop
+                    }
                 },
                 context,
             ),
@@ -695,8 +702,15 @@ pub fn song_row(
                 .background(Brush::Theme(ThemeBrush::CardBackground))
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center)
-                .on_pointer_pressed(context.callback(move |_info: PointerEventInfo| {
-                    Message::PlaySong(play_queue.clone(), index)
+                .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                    // Left-click only: a right-click must not start
+                    // playback — it falls through to the row's press
+                    // handler, which opens the context menu.
+                    if info.is_left_button_pressed {
+                        Message::PlaySong(play_queue.clone(), index)
+                    } else {
+                        Message::Noop
+                    }
                 }))
                 .content(SymbolIcon::new().symbol(Symbol::Play)),
         ));
@@ -769,6 +783,16 @@ pub fn song_row(
     };
 
     let hover_id = song.id.clone();
+    // Right-click opens the context menu for this song; a
+    // left-click on the row itself does nothing (only the play
+    // overlay and the like button act on left-click).
+    let menu_target = DetailsTarget {
+        kind: "song".to_string(),
+        id: song.id.clone(),
+        title: song.name.clone(),
+        subtitle: artist_names(song),
+        art: art_url(&song.image, "500x500"),
+    };
     Border::new()
         .background(if hovered {
             Brush::Theme(ThemeBrush::CardBackground)
@@ -776,6 +800,13 @@ pub fn song_row(
             Brush::Solid(Color::transparent())
         })
         .corner_radius(CornerRadius::uniform(4.0))
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_right_button_pressed {
+                Message::OpenMenu(menu_target.clone(), info.window_x, info.window_y)
+            } else {
+                Message::Noop
+            }
+        }))
         .on_pointer_entered(
             context.callback(move |_info: PointerEventInfo| {
                 Message::CardHover(Some(hover_id.clone()))
