@@ -75,6 +75,11 @@ pub fn view(
         ));
 
     let mut sections: Vec<KeyedView> = vec![KeyedView::new("header", header)];
+    // While this artist's top songs are downloading, show the
+    // overall progress above the song list.
+    if let Some(progress) = views::collection_download_progress(&target.id, shell) {
+        sections.push(KeyedView::new("download", progress));
+    }
     if !content.songs.is_empty() {
         let rows: Vec<KeyedView> = content
             .songs

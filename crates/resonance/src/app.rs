@@ -285,9 +285,18 @@ async fn fetch_songs_by_kind(
             .await
             .map(|album| album.songs.unwrap_or_default()),
         "artist" => {
-            client
+            // The artist's top songs. The dedicated top-songs
+            // search endpoint is empty for some artists server-side;
+            // fall back to the artist page's own top songs so a
+            // download (or a Play) still gets the songs.
+            let songs = client
                 .get_artist_top_songs(id, "", 0, None, None, None)
-                .await
+                .await?;
+            if !songs.is_empty() {
+                return Ok(songs);
+            }
+            let artist = client.get_artist_by_id(id, ArtistArgs::default()).await?;
+            Ok(artist.top_songs.unwrap_or_default())
         }
         _ => client
             .get_playlist_by_id(id, 50, 0)
@@ -1373,7 +1382,11 @@ impl Component for Shell {
                     None
                 };
                 let subfolder = if is_collection {
-                    download::sanitize_filename(&target.title)
+                    // The folder is named by the collection's ID,
+                    // not its title — two different albums /
+                    // playlists / artists can share a title, and
+                    // their songs must not land in the same folder.
+                    download::sanitize_filename(&target.id)
                 } else {
                     String::new()
                 };
@@ -1410,7 +1423,7 @@ impl Component for Shell {
                         downloaded_bytes: 0,
                         status: DownloadStatus::Queued,
                         error: None,
-                        file_name: download::song_file_name(&artist, &song.name),
+                        file_name: download::song_file_name(&song.id),
                         subfolder: subfolder.clone(),
                         art: crate::views::art_url(&song.image, "500x500"),
                         album: song.album.name.clone(),

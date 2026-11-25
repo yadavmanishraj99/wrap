@@ -811,7 +811,49 @@ pub fn details_action_row(
             });
         items.push(KeyedView::new("like", like_button));
     }
+    // The Pin button: a direct button in the action row (not
+    // buried in the More menu), so pinning an album / playlist /
+    // artist / song from its page is one click. An outline circle
+    // with a pin icon when not pinned; a filled accent circle when
+    // pinned. It sends the same TogglePin message the menus send.
+    let pin_target = target.clone();
+    let pin_button = Border::new()
+        .width(32.0)
+        .height(32.0)
+        .corner_radius(CornerRadius::uniform(16.0))
+        .background(if is_pinned {
+            Brush::Theme(ThemeBrush::Accent)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .border_thickness(if is_pinned { 0.0 } else { 2.0 })
+        .border_brush(Brush::Theme(ThemeBrush::PrimaryText))
+        .opacity(if is_pinned { 1.0 } else { 0.7 })
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                Message::TogglePin(pin_target.clone())
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(if is_pinned {
+                    Symbol::UnPin
+                } else {
+                    Symbol::Pin
+                })
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip(if is_pinned {
+            "Unpin from sidebar"
+        } else {
+            "Pin to sidebar"
+        });
     items.push(KeyedView::new("download", download_button));
+    items.push(KeyedView::new("pin", pin_button));
     items.push(KeyedView::new("more", more_button));
 
     StackPanel::new()

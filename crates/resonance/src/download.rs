@@ -584,21 +584,11 @@ pub fn sanitize_filename(name: &str) -> String {
         .to_string()
 }
 
-/// The file name for a song: `Artist - Title.mp3`.
-pub fn song_file_name(artist: &str, title: &str) -> String {
-    let artist = sanitize_filename(artist);
-    let title = sanitize_filename(title);
-    let base = if artist.is_empty() || artist == "Unknown artist" {
-        title
-    } else {
-        format!("{artist} - {title}")
-    };
-    let base = if base.is_empty() {
-        "song".to_string()
-    } else {
-        base
-    };
-    format!("{base}.mp3")
+/// The file name for a song: its ID (`<song_id>.mp3`). Files are
+/// named by ID, not by artist/title — two different songs can
+/// share an artist and a title, and their files must not collide.
+pub fn song_file_name(song_id: &str) -> String {
+    format!("{}.mp3", sanitize_filename(song_id))
 }
 
 /// A `file://` URI for a local path, so a `MediaSource` or an
