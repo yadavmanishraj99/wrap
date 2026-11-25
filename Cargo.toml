@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = ["crates/saavnapi"]
+
+# Centralize common metadata across all crates
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Manishraj Yadav"]
