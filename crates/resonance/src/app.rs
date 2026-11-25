@@ -19,7 +19,7 @@
 
 use std::time::Duration;
 
-use saavnapi::{LaunchData, LaunchItem, SearchAll, Song};
+use saavnapi::{ArtistArgs, LaunchData, SearchAll, Song};
 use windows_reactor::*;
 
 use crate::data;
@@ -34,6 +34,7 @@ pub enum Page {
     Search,
     Library,
     Settings,
+    Details,
 }
 
 impl Page {
@@ -43,6 +44,7 @@ impl Page {
             Self::Search => "Search",
             Self::Library => "Your Library",
             Self::Settings => "Settings",
+            Self::Details => "Details",
         }
     }
 
@@ -56,8 +58,40 @@ impl Page {
     }
 }
 
+/// What a details page was opened for (from a media card).
+#[derive(Debug, Clone)]
+pub struct DetailsTarget {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub art: Option<String>,
+}
+
+/// The data a details page shows once loaded. `songs` is the
+/// playable list (for a song: just itself); `song` is set only for
+/// a song detail (for the like button); `lyrics` only for songs.
+#[derive(Debug, Clone)]
+pub struct DetailsContent {
+    pub song: Option<Song>,
+    pub songs: Vec<Song>,
+    pub lyrics: Option<String>,
+    pub subtitle: String,
+    pub art: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DetailsState {
+    pub target: DetailsTarget,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub content: Option<DetailsContent>,
+}
+
 pub struct Shell {
     pub page: Page,
+    pub details: Option<DetailsState>,
+    pub details_from: Page,
     pub pane_open: bool,
     pub search_text: String,
     pub search_suggestions: Vec<String>,
@@ -95,8 +129,10 @@ pub enum Message {
     VolumeChanged(f64),
     Tick,
     ToggleLike(Song),
-    PlayLaunchItem(LaunchItem),
     PlayByKind(String, String),
+    OpenDetails(DetailsTarget),
+    DetailsLoaded(Result<DetailsContent, String>),
+    Back,
     SetTheme(Theme),
     SetQuality(QualitySetting),
     SetAutoplay(bool),
@@ -143,6 +179,94 @@ fn spawn_play_by_kind(context: &ComponentContext<Shell>, kind: String, id: Strin
     });
 }
 
+/// Fetch a details page's content: a song (with lyrics when
+/// available), an album, an artist's top songs, or a playlist.
+async fn load_details(
+    client: &saavnapi::SaavnClient,
+    target: &DetailsTarget,
+) -> saavnapi::Result<DetailsContent> {
+    match target.kind.as_str() {
+        "song" => {
+            let songs = client.get_songs_by_ids(&[target.id.as_str()]).await?;
+            let song = songs.into_iter().next();
+            let mut lyrics = None;
+            if let Some(song) = &song
+                && let Some(lyrics_id) = &song.lyrics_id
+                && let Ok(Some(found)) = client.get_lyrics(lyrics_id).await
+            {
+                lyrics = Some(found.text.replace("<br><br>", "\n\n").replace("<br>", "\n"));
+            }
+            let (subtitle, art) = match &song {
+                Some(song) => (
+                    views::artist_names(song),
+                    views::art_url(&song.image, "500x500"),
+                ),
+                None => (target.subtitle.clone(), target.art.clone()),
+            };
+            let songs = song.clone().into_iter().collect();
+            Ok(DetailsContent {
+                song,
+                songs,
+                lyrics,
+                subtitle,
+                art,
+            })
+        }
+        "album" => {
+            let album = client.get_album_by_id(&target.id).await?;
+            let subtitle = album
+                .artists
+                .primary
+                .iter()
+                .map(|artist| artist.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(DetailsContent {
+                song: None,
+                songs: album.songs.unwrap_or_default(),
+                lyrics: None,
+                subtitle,
+                art: views::art_url(&album.image, "500x500"),
+            })
+        }
+        "artist" => {
+            let artist = client
+                .get_artist_by_id(&target.id, ArtistArgs::default())
+                .await?;
+            let subtitle = artist
+                .follower_count
+                .map(|count| format!("{count} followers"))
+                .unwrap_or_default();
+            Ok(DetailsContent {
+                song: None,
+                songs: artist.top_songs.unwrap_or_default(),
+                lyrics: None,
+                subtitle,
+                art: views::art_url(&artist.image, "500x500"),
+            })
+        }
+        _ => {
+            let playlist = client.get_playlist_by_id(&target.id, 100, 0).await?;
+            Ok(DetailsContent {
+                song: None,
+                songs: playlist.songs.unwrap_or_default(),
+                lyrics: None,
+                subtitle: playlist.description.clone().unwrap_or_default(),
+                art: views::art_url(&playlist.image, "500x500"),
+            })
+        }
+    }
+}
+
+/// Open a details page and load its content in the background.
+fn spawn_details_load(context: &ComponentContext<Shell>, target: DetailsTarget) {
+    context.spawn_background(move |_| {
+        let result =
+            data::runtime_handle().block_on(async { load_details(&data::client(), &target).await });
+        Message::DetailsLoaded(result.map_err(|err| err.to_string()))
+    });
+}
+
 /// Poll the player every 500ms while a song is loaded.
 fn spawn_tick(context: &ComponentContext<Shell>) {
     context.spawn_background(move |_| {
@@ -180,6 +304,8 @@ impl Component for Shell {
 
         Self {
             page: Page::Home,
+            details: None,
+            details_from: Page::Home,
             pane_open: true,
             search_text: String::new(),
             search_suggestions: Vec::new(),
@@ -334,11 +460,34 @@ impl Component for Shell {
             Message::ToggleLike(song) => {
                 self.library.toggle_like(song);
             }
-            Message::PlayLaunchItem(item) => {
-                spawn_play_by_kind(context, item.kind, item.id);
-            }
             Message::PlayByKind(kind, id) => {
                 spawn_play_by_kind(context, kind, id);
+            }
+            Message::OpenDetails(target) => {
+                if self.page != Page::Details {
+                    self.details_from = self.page;
+                }
+                self.page = Page::Details;
+                self.details = Some(DetailsState {
+                    target: target.clone(),
+                    loading: true,
+                    error: None,
+                    content: None,
+                });
+                spawn_details_load(context, target);
+            }
+            Message::DetailsLoaded(result) => {
+                if let Some(details) = &mut self.details {
+                    details.loading = false;
+                    match result {
+                        Ok(content) => details.content = Some(content),
+                        Err(err) => details.error = Some(err),
+                    }
+                }
+            }
+            Message::Back => {
+                self.page = self.details_from;
+                self.details = None;
             }
             Message::RetryHome => {
                 self.home_loading = true;
@@ -363,11 +512,14 @@ impl Component for Shell {
             Theme::System => "Theme: System",
         };
 
+        let on_details = self.page == Page::Details;
         let title_bar = TitleBar::new()
             .preferred_height(WindowTitleBarHeight::Tall)
             .title("Resonance")
             .subtitle(self.page.title())
-            .is_back_button_visible(false)
+            .is_back_button_visible(on_details)
+            .is_back_button_enabled(on_details)
+            .on_back_requested(context.message(Message::Back))
             .is_pane_toggle_button_visible(true)
             .on_pane_toggle_requested(context.message(Message::TogglePane))
             .slots([
@@ -402,6 +554,7 @@ impl Component for Shell {
             Page::Search => pages::search::view(self, context),
             Page::Library => pages::library::view(self, context),
             Page::Settings => pages::settings::view(self, context),
+            Page::Details => pages::details::view(self, context),
         };
 
         let navigation = NavigationView::new()

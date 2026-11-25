@@ -1,73 +1,67 @@
-//! Home page: trending songs, top playlists, new albums and charts
-//! from the launch data loaded when the shell opens. Tapping Play on
-//! a row fetches its songs in the background and starts the queue.
+//! Home page: launch-data sections (Trending now, Top playlists,
+//! New albums, Charts) as rows of clickable media cards.
+//!
+//! Row rule: a section shows at most two rows of cards — one row
+//! when it has 10 or fewer items, two rows when it has more (up to
+//! 20 items shown). Rows scroll horizontally; clicking a card opens
+//! its details page.
 
 use saavnapi::LaunchItem;
 use windows_reactor::*;
 
-use crate::app::{Message, Shell};
+use crate::app::{DetailsTarget, Message, Shell};
 use crate::views;
 
-/// One launch item row: artwork, title/subtitle, Play button.
-fn launch_row(item: &LaunchItem, context: &mut ViewContext<Shell>) -> View {
-    let art_view: View = match crate::views::art_url(&item.image, "150x150") {
-        Some(url) => views::image_from_url(&url)
-            .width(48.0)
-            .height(48.0)
-            .stretch(Stretch::UniformToFill)
-            .grid_column(0)
-            .into(),
-        None => Border::new()
-            .width(48.0)
-            .height(48.0)
-            .grid_column(0)
-            .content(
-                SymbolIcon::new()
-                    .symbol(Symbol::Audio)
-                    .horizontal_alignment(HorizontalAlignment::Center)
-                    .vertical_alignment(VerticalAlignment::Center),
-            ),
-    };
-
-    Grid::new()
-        .columns([
-            GridLength::Pixel(48.0),
-            GridLength::Star(1.0),
-            GridLength::Auto,
-        ])
-        .margin(4.0)
-        .children((
-            art_view,
-            StackPanel::new()
-                .margin(12.0)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1)
-                .children((
-                    TextBlock::new()
-                        .text(item.title.clone())
-                        .font_size(14.0)
-                        .font_weight(FontWeight::SEMI_BOLD),
-                    TextBlock::new()
-                        .text(item.subtitle.clone().unwrap_or_else(|| item.kind.clone()))
-                        .font_size(12.0)
-                        .opacity(0.7),
-                )),
-            Button::new()
-                .margin(4.0)
-                .grid_column(2)
-                .on_click(context.message(Message::PlayLaunchItem(item.clone())))
-                .content(SymbolIcon::new().symbol(Symbol::Play)),
-        ))
-}
-
-/// A section: heading + up to 6 rows.
+/// One section: heading + up to 20 cards in one row (<= 10 items) or
+/// two rows (> 10 items), scrolling horizontally.
 fn section(title: &str, items: &[LaunchItem], context: &mut ViewContext<Shell>) -> View {
-    let mut rows: Vec<KeyedView> = Vec::new();
-    rows.push(KeyedView::new("header", views::section_header(title)));
-    for item in items.iter().take(6) {
-        rows.push(KeyedView::new(item.id.clone(), launch_row(item, context)));
+    let shown: Vec<&LaunchItem> = items.iter().take(20).collect();
+    if shown.is_empty() {
+        return View::empty();
     }
-    StackPanel::new().spacing(4.0).keyed_children(rows)
+    let mut row = |slice: &[&LaunchItem]| -> View {
+        let cards: Vec<KeyedView> = slice
+            .iter()
+            .map(|item| {
+                KeyedView::new(
+                    item.id.clone(),
+                    views::media_card(
+                        views::art_url(&item.image, "500x500"),
+                        &item.title,
+                        item.subtitle.as_deref().unwrap_or(&item.kind),
+                        160.0,
+                        Message::OpenDetails(DetailsTarget {
+                            kind: item.kind.clone(),
+                            id: item.id.clone(),
+                            title: item.title.clone(),
+                            subtitle: item.subtitle.clone().unwrap_or_default(),
+                            art: views::art_url(&item.image, "500x500"),
+                        }),
+                        context,
+                    ),
+                )
+            })
+            .collect();
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(4.0)
+            .keyed_children(cards)
+    };
+    let body: View = if shown.len() <= 10 {
+        row(&shown)
+    } else {
+        let (first, second) = shown.split_at(10);
+        StackPanel::new()
+            .spacing(12.0)
+            .children((row(first), row(second)))
+    };
+    StackPanel::new().spacing(8.0).children((
+        views::section_header(title),
+        ScrollViewer::new()
+            .horizontal_scroll_bar_visibility(ScrollBarVisibility::Auto)
+            .vertical_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+            .content(body),
+    ))
 }
 
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {

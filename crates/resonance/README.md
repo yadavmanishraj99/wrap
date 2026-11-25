@@ -48,7 +48,8 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 
 | Page | Status |
 | --- | --- |
-| Home | Live — launch data: Trending now, Top playlists, New albums, Charts; rows play their songs |
+| Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10), scrolling horizontally |
+| Details | Live — opened by clicking any Home card: artwork, title, subtitle, Play, song list, lyrics for songs when available; title-bar back button returns |
 | Search | Live — AutoSuggestBox suggestions + Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists (persisted locally) |
 | Settings | Live — theme, stream quality, volume, autoplay, about |
@@ -63,8 +64,9 @@ crates/resonance/src/
   data.rs     shared tokio runtime + saavnapi client
   player.rs   MediaPlayer wrapper: queue, play/pause/seek/volume
   store.rs    Library + Settings persistence (%LOCALAPPDATA%)
-  views.rs    shared bits: song row, section header, formatting
-  pages/      home.rs, search.rs, library.rs, settings.rs
+  views.rs    shared bits: song row, media card, section header,
+              formatting
+  pages/      home.rs, details.rs, search.rs, library.rs, settings.rs
 ```
 
 ## Design

@@ -58,6 +58,51 @@ pub fn section_header(title: &str) -> View {
         .into()
 }
 
+/// A clickable media card: artwork, title, subtitle. Clicking sends
+/// `message` (usually `OpenDetails`). Artwork is square, `width`
+/// wide; the title wraps to two lines.
+pub fn media_card(
+    art: Option<String>,
+    title: &str,
+    subtitle: &str,
+    width: f64,
+    message: Message,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    let art_view: View = match art {
+        Some(url) => image_from_url(&url)
+            .width(width)
+            .height(width)
+            .stretch(Stretch::UniformToFill)
+            .into(),
+        None => Border::new().width(width).height(width).content(
+            SymbolIcon::new()
+                .symbol(Symbol::Audio)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        ),
+    };
+    Button::new()
+        .width(width)
+        .margin(4.0)
+        .on_click(context.message(message))
+        .content(
+            StackPanel::new().spacing(8.0).children((
+                art_view,
+                TextBlock::new()
+                    .text(title)
+                    .font_size(14.0)
+                    .font_weight(FontWeight::SEMI_BOLD)
+                    .text_wrapping(TextWrapping::Wrap),
+                TextBlock::new()
+                    .text(subtitle)
+                    .font_size(12.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::Wrap),
+            )),
+        )
+}
+
 /// One song row: artwork, title/artist, duration, play + like buttons.
 /// `queue` is the full list the row belongs to, so Play starts the
 /// queue at this song's position.
