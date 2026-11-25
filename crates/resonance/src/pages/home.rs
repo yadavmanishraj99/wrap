@@ -37,15 +37,14 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     let content: View = if shell.home_loading {
         // Skeleton: the page's shape while launch data loads —
         // heading plus three section skeletons, shimmering.
-        let opacity = shell.skeleton_opacity();
         StackPanel::new().margin(24.0).spacing(32.0).children((
             TextBlock::new()
                 .text("Home")
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
-            views::skeleton_section(opacity, 5),
-            views::skeleton_section(opacity, 5),
-            views::skeleton_section(opacity, 5),
+            views::skeleton_section(shell, 5),
+            views::skeleton_section(shell, 5),
+            views::skeleton_section(shell, 5),
         ))
     } else if let Some(err) = &shell.home_error {
         StackPanel::new().margin(24.0).spacing(12.0).children((

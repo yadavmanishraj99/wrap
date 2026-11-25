@@ -10,6 +10,7 @@ use saavnapi::{ArtistGroups, ArtistMap, DownloadLink, Song};
 use windows_reactor::*;
 
 use crate::app::{DetailsTarget, Message, Shell};
+use crate::store::Theme;
 
 /// Seconds as `m:ss`.
 pub fn fmt_time(secs: f64) -> String {
@@ -82,6 +83,7 @@ pub fn card_section(
                         (*target).clone(),
                         target.art.clone(),
                         shell.hovered_card.as_deref() == Some(target.id.as_str()),
+                        shell,
                         context,
                     ),
                 )
@@ -216,6 +218,7 @@ pub fn media_card(
     target: DetailsTarget,
     art: Option<String>,
     hovered: bool,
+    shell: &Shell,
     context: &mut ViewContext<Shell>,
 ) -> View {
     let size = 168.0;
@@ -228,6 +231,9 @@ pub fn media_card(
             .height(size)
             .stretch(Stretch::UniformToFill)
             .into(),
+        // No art: a music-note icon. The tile behind it is a solid
+        // placeholder fill (not transparent), so the card reads as
+        // a tile instead of an empty hole.
         None => SymbolIcon::new()
             .symbol(Symbol::Audio)
             .horizontal_alignment(HorizontalAlignment::Center)
@@ -240,6 +246,7 @@ pub fn media_card(
             .width(size)
             .height(size)
             .corner_radius(CornerRadius::uniform(4.0))
+            .background(skeleton_fill(shell.settings.theme))
             .on_pointer_pressed(card_press(target.clone(), context))
             .content(art_view),
     )];
@@ -436,18 +443,33 @@ pub fn song_row(
 // ---------------------------------------------------------------------------
 
 /// Skeleton fill opacity, bright phase of the shimmer.
-pub const SKELETON_BRIGHT: f64 = 0.85;
+pub const SKELETON_BRIGHT: f64 = 1.0;
 /// Skeleton fill opacity, dim phase of the shimmer.
-pub const SKELETON_DIM: f64 = 0.45;
+pub const SKELETON_DIM: f64 = 0.75;
+
+/// The skeleton fill: a solid gray with real contrast against the
+/// page background in both themes. Checked with the WCAG contrast
+/// formula (page: dark #202020, light #F3F3F3; fill blended at the
+/// pulse opacity): dark #525252 is 1.73:1 dim / 2.09:1 bright,
+/// light #B2B2B2 is 1.61:1 dim / 1.91:1 bright. The old
+/// CardBackground fill was ~1.1:1 in both themes — nearly
+/// invisible. `Theme::System` follows the app's dark-first
+/// default.
+pub fn skeleton_fill(theme: Theme) -> Brush {
+    match theme {
+        Theme::Light => Brush::Solid(Color::rgb(0xB2, 0xB2, 0xB2)),
+        _ => Brush::Solid(Color::rgb(0x52, 0x52, 0x52)),
+    }
+}
 
 /// A rounded placeholder bar (a line of text, a heading, a button).
-pub fn skeleton_bar(width: f64, height: f64, opacity: f64) -> View {
+pub fn skeleton_bar(width: f64, height: f64, shell: &Shell) -> View {
     Border::new()
         .width(width)
         .height(height)
         .corner_radius(CornerRadius::uniform(height / 2.0))
-        .background(Brush::Theme(ThemeBrush::CardBackground))
-        .opacity(opacity)
+        .background(skeleton_fill(shell.settings.theme))
+        .opacity(shell.skeleton_opacity())
         .opacity_transition(std::time::Duration::from_millis(300))
         .into()
 }
@@ -455,29 +477,29 @@ pub fn skeleton_bar(width: f64, height: f64, opacity: f64) -> View {
 /// A square placeholder for artwork (a card image, a details-page
 /// cover). `size` is the side length; corners are rounded 4px, the
 /// same as the real artwork it stands in for.
-pub fn skeleton_art(size: f64, opacity: f64) -> View {
+pub fn skeleton_art(size: f64, shell: &Shell) -> View {
     Border::new()
         .width(size)
         .height(size)
         .corner_radius(CornerRadius::uniform(4.0))
-        .background(Brush::Theme(ThemeBrush::CardBackground))
-        .opacity(opacity)
+        .background(skeleton_fill(shell.settings.theme))
+        .opacity(shell.skeleton_opacity())
         .opacity_transition(std::time::Duration::from_millis(300))
         .into()
 }
 
 /// A media-card-shaped skeleton: 168px art + title + subtitle bars,
 /// same size and spacing as a real card.
-pub fn skeleton_card(opacity: f64) -> View {
+pub fn skeleton_card(shell: &Shell) -> View {
     StackPanel::new().spacing(8.0).children((
-        skeleton_art(168.0, opacity),
-        skeleton_bar(120.0, 12.0, opacity),
-        skeleton_bar(84.0, 10.0, opacity),
+        skeleton_art(168.0, shell),
+        skeleton_bar(120.0, 12.0, shell),
+        skeleton_bar(84.0, 10.0, shell),
     ))
 }
 
 /// A song-row-shaped skeleton: 48px art + title/artist bars.
-pub fn skeleton_row(opacity: f64) -> View {
+pub fn skeleton_row(shell: &Shell) -> View {
     StackPanel::new()
         .orientation(Orientation::Horizontal)
         .spacing(12.0)
@@ -487,28 +509,28 @@ pub fn skeleton_row(opacity: f64) -> View {
                 .width(48.0)
                 .height(48.0)
                 .corner_radius(CornerRadius::uniform(4.0))
-                .background(Brush::Theme(ThemeBrush::CardBackground))
-                .opacity(opacity)
+                .background(skeleton_fill(shell.settings.theme))
+                .opacity(shell.skeleton_opacity())
                 .opacity_transition(std::time::Duration::from_millis(300)),
             StackPanel::new()
                 .vertical_alignment(VerticalAlignment::Center)
                 .spacing(8.0)
                 .children((
-                    skeleton_bar(180.0, 12.0, opacity),
-                    skeleton_bar(120.0, 10.0, opacity),
+                    skeleton_bar(180.0, 12.0, shell),
+                    skeleton_bar(120.0, 10.0, shell),
                 )),
         ))
 }
 
 /// A section-shaped skeleton: heading bar + one row of `cards`
 /// skeleton cards, 12px apart — the same shape as a real section.
-pub fn skeleton_section(opacity: f64, cards: usize) -> View {
+pub fn skeleton_section(shell: &Shell, cards: usize) -> View {
     let mut card_views: Vec<KeyedView> = Vec::new();
     for i in 0..cards {
-        card_views.push(KeyedView::new(format!("card{i}"), skeleton_card(opacity)));
+        card_views.push(KeyedView::new(format!("card{i}"), skeleton_card(shell)));
     }
     StackPanel::new().spacing(8.0).children((
-        skeleton_bar(160.0, 20.0, opacity),
+        skeleton_bar(160.0, 20.0, shell),
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(12.0)

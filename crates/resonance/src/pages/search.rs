@@ -34,10 +34,9 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     let content: View = if shell.search_loading {
         // Skeleton: the results' shape while search_all loads —
         // two section skeletons, shimmering.
-        let opacity = shell.skeleton_opacity();
         StackPanel::new().spacing(32.0).children((
-            views::skeleton_section(opacity, 5),
-            views::skeleton_section(opacity, 5),
+            views::skeleton_section(shell, 5),
+            views::skeleton_section(shell, 5),
         ))
     } else if let Some(err) = &shell.search_error {
         TextBlock::new()

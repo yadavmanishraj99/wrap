@@ -21,16 +21,15 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     if details.loading {
         // Skeleton: the details page's shape while it loads — a
         // cover, title and subtitle bars, then song rows, shimmering.
-        let opacity = shell.skeleton_opacity();
         return ScrollViewer::new().content(StackPanel::new().margin(24.0).spacing(12.0).children(
             (
-                views::skeleton_art(200.0, opacity),
-                views::skeleton_bar(220.0, 28.0, opacity),
-                views::skeleton_bar(160.0, 14.0, opacity),
-                views::skeleton_row(opacity),
-                views::skeleton_row(opacity),
-                views::skeleton_row(opacity),
-                views::skeleton_row(opacity),
+                views::skeleton_art(200.0, shell),
+                views::skeleton_bar(220.0, 28.0, shell),
+                views::skeleton_bar(160.0, 14.0, shell),
+                views::skeleton_row(shell),
+                views::skeleton_row(shell),
+                views::skeleton_row(shell),
+                views::skeleton_row(shell),
             ),
         ));
     }
