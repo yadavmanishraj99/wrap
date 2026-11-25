@@ -353,7 +353,9 @@ fn hover_button(
 
 /// One song row: artwork, title/artist, duration, play + like buttons.
 /// `queue` is the full list the row belongs to, so Play starts the
-/// queue at this song's position.
+/// queue at this song's position. On hover, a circular play icon
+/// appears over the art (the same hover affordance as the media
+/// cards); clicking it plays the song.
 pub fn song_row(
     song: &Song,
     queue: &[Song],
@@ -366,13 +368,13 @@ pub fn song_row(
         .duration
         .map(|d| fmt_time(d as f64))
         .unwrap_or_default();
+    let hovered = shell.hovered_card.as_deref() == Some(song.id.as_str());
 
-    let art_view: View = match art_url(&song.image, "150x150") {
+    let art_border: View = match art_url(&song.image, "150x150") {
         Some(url) => Border::new()
             .width(48.0)
             .height(48.0)
             .corner_radius(CornerRadius::uniform(4.0))
-            .grid_column(0)
             .content(
                 image_from_url(&url)
                     .width(48.0)
@@ -383,7 +385,6 @@ pub fn song_row(
             .width(48.0)
             .height(48.0)
             .corner_radius(CornerRadius::uniform(4.0))
-            .grid_column(0)
             .content(
                 SymbolIcon::new()
                     .symbol(Symbol::Audio)
@@ -391,56 +392,92 @@ pub fn song_row(
                     .vertical_alignment(VerticalAlignment::Center),
             ),
     };
-
-    Grid::new()
-        .columns([
-            GridLength::Pixel(48.0),
-            GridLength::Star(1.0),
-            GridLength::Auto,
-            GridLength::Auto,
-            GridLength::Auto,
-        ])
-        .margin(4.0)
-        .children((
-            art_view,
-            StackPanel::new()
-                .margin(12.0)
+    let mut art_children: Vec<KeyedView> = vec![KeyedView::new("art", art_border)];
+    if hovered {
+        let play_queue = queue.to_vec();
+        art_children.push(KeyedView::new(
+            "play",
+            Border::new()
+                .width(32.0)
+                .height(32.0)
+                .corner_radius(CornerRadius::uniform(16.0))
+                .border_thickness(1.0)
+                .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+                .background(Brush::Theme(ThemeBrush::CardBackground))
+                .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1)
+                .on_pointer_pressed(context.callback(move |_info: PointerEventInfo| {
+                    Message::PlaySong(play_queue.clone(), index)
+                }))
+                .content(SymbolIcon::new().symbol(Symbol::Play)),
+        ));
+    }
+    let art_view: View = Grid::new()
+        .width(48.0)
+        .height(48.0)
+        .grid_column(0)
+        .keyed_children(art_children);
+
+    let hover_id = song.id.clone();
+    Border::new()
+        .background(Brush::Solid(Color::transparent()))
+        .on_pointer_entered(
+            context.callback(move |_info: PointerEventInfo| {
+                Message::CardHover(Some(hover_id.clone()))
+            }),
+        )
+        .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::CardHover(None)))
+        .content(
+            Grid::new()
+                .columns([
+                    GridLength::Pixel(48.0),
+                    GridLength::Star(1.0),
+                    GridLength::Auto,
+                    GridLength::Auto,
+                    GridLength::Auto,
+                ])
+                .margin(4.0)
                 .children((
+                    art_view,
+                    StackPanel::new()
+                        .margin(12.0)
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .grid_column(1)
+                        .children((
+                            TextBlock::new()
+                                .text(song.name.clone())
+                                .font_size(14.0)
+                                .font_weight(FontWeight::SEMI_BOLD)
+                                .text_wrapping(TextWrapping::Wrap),
+                            TextBlock::new()
+                                .text(artist_names(song))
+                                .font_size(12.0)
+                                .opacity(0.7)
+                                .text_wrapping(TextWrapping::Wrap),
+                        )),
                     TextBlock::new()
-                        .text(song.name.clone())
-                        .font_size(14.0)
-                        .font_weight(FontWeight::SEMI_BOLD)
-                        .text_wrapping(TextWrapping::Wrap),
-                    TextBlock::new()
-                        .text(artist_names(song))
+                        .text(duration)
                         .font_size(12.0)
                         .opacity(0.7)
-                        .text_wrapping(TextWrapping::Wrap),
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .margin(12.0)
+                        .grid_column(2),
+                    Button::new()
+                        .margin(4.0)
+                        .grid_column(3)
+                        .on_click(context.message(Message::ToggleLike(song.clone())))
+                        .content(SymbolIcon::new().symbol(if liked {
+                            Symbol::Favorite
+                        } else {
+                            Symbol::Add
+                        })),
+                    Button::new()
+                        .margin(4.0)
+                        .grid_column(4)
+                        .on_click(context.message(Message::PlaySong(queue.to_vec(), index)))
+                        .content(SymbolIcon::new().symbol(Symbol::Play)),
                 )),
-            TextBlock::new()
-                .text(duration)
-                .font_size(12.0)
-                .opacity(0.7)
-                .vertical_alignment(VerticalAlignment::Center)
-                .margin(12.0)
-                .grid_column(2),
-            Button::new()
-                .margin(4.0)
-                .grid_column(3)
-                .on_click(context.message(Message::ToggleLike(song.clone())))
-                .content(SymbolIcon::new().symbol(if liked {
-                    Symbol::Favorite
-                } else {
-                    Symbol::Add
-                })),
-            Button::new()
-                .margin(4.0)
-                .grid_column(4)
-                .on_click(context.message(Message::PlaySong(queue.to_vec(), index)))
-                .content(SymbolIcon::new().symbol(Symbol::Play)),
-        ))
+        )
 }
 
 // ---------------------------------------------------------------------------

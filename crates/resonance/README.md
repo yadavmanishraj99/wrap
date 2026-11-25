@@ -105,6 +105,10 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   queue's song rows); playing a row starts the queue there. The
   full Queue page still exists in code but has no entry point since
   the player bar's queue button was removed.
+- **Song rows** — in a details page (and the queue panel), hovering a
+  song row shows a circular play icon over its 48px art; clicking it
+  plays that song in its queue. The row also keeps its permanent
+  Play and Like buttons at the right end.
 - **Lyrics** — the song details page shows a song's lyrics when the
   API has them. It currently has no entry point since the player
   bar's lyrics button was removed. No connect-to-device, miniplayer,
@@ -138,10 +142,15 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   each as a row with its art (48px, the same size as the song-row art
   in the details views) + title only (no subtitle), the
   title at 14px, the same size as the nav items. The 48px art makes
-  the pinned rows taller than a plain nav item. Every square art in
+  the pinned rows taller than a plain nav item. On hover, a circular
+  play icon appears over the pinned art; clicking it plays the item —
+  a song plays itself, an artist plays their top songs, an
+  album/playlist/chart plays its songs. (The icon is a sibling of
+  the row, not a child, so its press never also triggers the row's
+  click.) Every square art in
   the app has 4px rounded corners (pinned art, song-row art, details
-  header art, media-card art, Now Playing art); artist avatars stay
-  circular. They persist
+  header art, media-card art, Now Playing art, player-bar art);
+  artist avatars stay circular. They persist
   in `library.json`. A pinned row is a shortcut, not a page: clicking
   it never changes the nav selection. A pinned song plays on click
   (its full Song is fetched by id first); any other pinned item opens

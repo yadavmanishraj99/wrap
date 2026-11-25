@@ -512,8 +512,16 @@ fn nav_divider() -> KeyedView {
 /// not a page — `selects_on_invoked(false)` so clicking it never
 /// changes the nav selection; the Border's pointer press opens/plays
 /// it instead. A pinned song plays on click; any other kind opens
-/// its details page.
-fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> KeyedView {
+/// its details page. On hover, a circular play icon appears over the
+/// art; clicking it plays the item — a song plays itself, an artist
+/// plays their top songs, an album/playlist/chart plays its songs.
+/// The play icon is a sibling of the row (not a child), so its press
+/// never also triggers the row's press handler.
+fn pinned_nav_item(
+    pinned: &PinnedItem,
+    hovered: bool,
+    context: &mut ViewContext<Shell>,
+) -> KeyedView {
     let item = pinned.clone();
     let message = if item.kind == "song" {
         Message::PlayPinnedSong(item.id.clone())
@@ -526,7 +534,14 @@ fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> Key
             art: item.art.clone(),
         })
     };
-    let art: View = match &item.art {
+    // The hover play icon plays the item: a song plays itself, an
+    // artist plays their top songs, anything else plays its songs.
+    let play_message = if item.kind == "song" {
+        Message::PlayPinnedSong(item.id.clone())
+    } else {
+        Message::PlayByKind(item.kind.clone(), item.id.clone())
+    };
+    let art_border: View = match &item.art {
         Some(url) => Border::new()
             .width(48.0)
             .height(48.0)
@@ -571,13 +586,42 @@ fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> Key
                 .orientation(Orientation::Horizontal)
                 .spacing(8.0)
                 .vertical_alignment(VerticalAlignment::Center)
-                .children((art, title)),
+                .children((art_border, title)),
         );
+    let mut content_children: Vec<KeyedView> = vec![KeyedView::new("row", row)];
+    if hovered {
+        content_children.push(KeyedView::new(
+            "play",
+            Border::new()
+                .width(32.0)
+                .height(32.0)
+                .corner_radius(CornerRadius::uniform(16.0))
+                .border_thickness(1.0)
+                .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+                .background(Brush::Theme(ThemeBrush::CardBackground))
+                .horizontal_alignment(HorizontalAlignment::Left)
+                .vertical_alignment(VerticalAlignment::Center)
+                .margin(Thickness::new(8.0, 0.0, 0.0, 0.0))
+                .on_pointer_pressed(
+                    context.callback(move |_info: PointerEventInfo| play_message.clone()),
+                )
+                .content(SymbolIcon::new().symbol(Symbol::Play)),
+        ));
+    }
+    let hover_id = item.id.clone();
+    let content =
+        Border::new()
+            .background(Brush::Solid(Color::transparent()))
+            .on_pointer_entered(context.callback(move |_info: PointerEventInfo| {
+                Message::CardHover(Some(hover_id.clone()))
+            }))
+            .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::CardHover(None)))
+            .content(Grid::new().keyed_children(content_children));
     KeyedView::new(
         format!("pin-{}-{}", item.kind, item.id),
         NavigationViewItem::new()
             .selects_on_invoked(false)
-            .slots([SlotView::new(NavigationViewItemSlot::Content, row)]),
+            .slots([SlotView::new(NavigationViewItemSlot::Content, content)]),
     )
 }
 
@@ -1127,7 +1171,8 @@ impl Component for Shell {
         if !self.library.pinned.is_empty() {
             menu_items.push(nav_divider());
             for pinned in &self.library.pinned {
-                menu_items.push(pinned_nav_item(pinned, context));
+                let hovered = self.hovered_card.as_deref() == Some(pinned.id.as_str());
+                menu_items.push(pinned_nav_item(pinned, hovered, context));
             }
         }
         // Settings last in the nav list (see above — the PaneFooter
@@ -1555,15 +1600,21 @@ impl Shell {
             ),
         };
         let art_view: View = match art {
-            Some(url) => views::image_from_url(&url)
+            Some(url) => Border::new()
                 .width(56.0)
                 .height(56.0)
-                .stretch(Stretch::UniformToFill)
+                .corner_radius(CornerRadius::uniform(4.0))
                 .grid_column(0)
-                .into(),
+                .content(
+                    views::image_from_url(&url)
+                        .width(56.0)
+                        .height(56.0)
+                        .stretch(Stretch::UniformToFill),
+                ),
             None => Border::new()
                 .width(56.0)
                 .height(56.0)
+                .corner_radius(CornerRadius::uniform(4.0))
                 .grid_column(0)
                 .content(
                     SymbolIcon::new()
