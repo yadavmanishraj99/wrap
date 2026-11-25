@@ -96,7 +96,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .content("Retry"),
         ))
     } else if let Some(home) = &shell.home {
-        StackPanel::new().margin(24.0).spacing(24.0).children((
+        StackPanel::new().margin(24.0).spacing(32.0).children((
             TextBlock::new()
                 .text("Home")
                 .font_size(28.0)
