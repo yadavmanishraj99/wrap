@@ -541,11 +541,14 @@ fn pinned_nav_item(
     } else {
         Message::PlayByKind(item.kind.clone(), item.id.clone())
     };
+    // Artist art is a full circle; every other kind is a 4px
+    // rounded square.
+    let art_radius = if item.kind == "artist" { 24.0 } else { 4.0 };
     let art_border: View = match &item.art {
         Some(url) => Border::new()
             .width(48.0)
             .height(48.0)
-            .corner_radius(CornerRadius::uniform(4.0))
+            .corner_radius(CornerRadius::uniform(art_radius))
             .content(
                 views::image_from_url(url)
                     .width(48.0)
@@ -555,7 +558,7 @@ fn pinned_nav_item(
         None => Border::new()
             .width(48.0)
             .height(48.0)
-            .corner_radius(CornerRadius::uniform(4.0))
+            .corner_radius(CornerRadius::uniform(art_radius))
             .background(Brush::Theme(ThemeBrush::CardBackground))
             .content(
                 SymbolIcon::new()

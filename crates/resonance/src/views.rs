@@ -245,7 +245,13 @@ pub fn media_card(
         Border::new()
             .width(size)
             .height(size)
-            .corner_radius(CornerRadius::uniform(4.0))
+            // Artist art is a full circle; every other kind is a
+            // 4px rounded square.
+            .corner_radius(CornerRadius::uniform(if target.kind == "artist" {
+                size / 2.0
+            } else {
+                4.0
+            }))
             .background(skeleton_fill(shell.settings.theme))
             .on_pointer_pressed(card_press(target.clone(), context))
             .content(art_view),
