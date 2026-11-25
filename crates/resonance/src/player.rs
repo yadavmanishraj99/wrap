@@ -196,6 +196,23 @@ impl Player {
         }
     }
 
+    /// Insert songs right after the current one (Play next). Songs
+    /// already anywhere in the queue are skipped. With no current
+    /// song this does nothing — the caller loads the queue instead.
+    pub fn insert_next(&mut self, songs: Vec<Song>) {
+        let Some(i) = self.index else {
+            return;
+        };
+        let at = i + 1;
+        let fresh: Vec<Song> = songs
+            .into_iter()
+            .filter(|song| !self.queue.iter().any(|queued| queued.id == song.id))
+            .collect();
+        for (offset, song) in fresh.into_iter().enumerate() {
+            self.queue.insert(at + offset, song);
+        }
+    }
+
     /// Shuffle the songs after the current one, keeping the song
     /// that's playing (and everything before it) in place. A tiny
     /// xorshift RNG keeps this dependency-free.

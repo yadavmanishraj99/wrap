@@ -91,11 +91,35 @@ pub struct DetailsState {
     pub content: Option<DetailsContent>,
 }
 
+/// An open context menu: what it was opened for and where on the
+/// window it sits (window-relative coordinates from the pointer).
+#[derive(Debug, Clone)]
+pub struct MenuState {
+    pub target: DetailsTarget,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// An open Properties dialog (from the context menu).
+#[derive(Debug, Clone)]
+pub struct PropertiesState {
+    pub target: DetailsTarget,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub content: Option<DetailsContent>,
+}
+
 pub struct Shell {
     pub page: Page,
     pub details: Option<DetailsState>,
     /// Page the title-bar back button returns to (Details, Queue).
     pub back_page: Page,
+    /// Card id the pointer is over (its hover buttons show).
+    pub hovered_card: Option<String>,
+    /// Open context menu, if any.
+    pub menu: Option<MenuState>,
+    /// Open Properties dialog, if any.
+    pub properties: Option<PropertiesState>,
     pub pane_open: bool,
     pub search_text: String,
     pub search_suggestions: Vec<String>,
@@ -140,6 +164,16 @@ pub enum Message {
     PlayByKind(String, String),
     OpenDetails(DetailsTarget),
     DetailsLoaded(Result<DetailsContent, String>),
+    CardHover(Option<String>),
+    CardPressed(DetailsTarget, PointerEventInfo),
+    OpenMenu(DetailsTarget, f64, f64),
+    CloseOverlay,
+    MenuPlay(DetailsTarget),
+    MenuPlayNext(DetailsTarget),
+    MenuProperties(DetailsTarget),
+    PlayNext(Vec<Song>),
+    PropertiesLoaded(Result<DetailsContent, String>),
+    CloseProperties,
     OpenQueue,
     ToggleShuffle,
     CycleRepeat,
@@ -162,31 +196,52 @@ fn spawn_home_load(context: &ComponentContext<Shell>) {
     });
 }
 
+/// Fetch a song/album/playlist/artist's songs: a song on its own,
+/// an album's songs, an artist's top songs, or a playlist's songs.
+async fn fetch_songs_by_kind(
+    client: &saavnapi::SaavnClient,
+    kind: &str,
+    id: &str,
+) -> saavnapi::Result<Vec<Song>> {
+    match kind {
+        "song" => client.get_songs_by_ids(&[id]).await,
+        "album" => client
+            .get_album_by_id(id)
+            .await
+            .map(|album| album.songs.unwrap_or_default()),
+        "artist" => {
+            client
+                .get_artist_top_songs(id, "", 0, None, None, None)
+                .await
+        }
+        _ => client
+            .get_playlist_by_id(id, 50, 0)
+            .await
+            .map(|playlist| playlist.songs.unwrap_or_default()),
+    }
+}
+
 /// Fetch a song/album/playlist/artist's songs in the background and
 /// start the queue at the first song. Failures are silent (Noop).
 fn spawn_play_by_kind(context: &ComponentContext<Shell>, kind: String, id: String) {
     context.spawn_background(move |_| {
-        let result = data::runtime_handle().block_on(async {
-            let client = data::client();
-            match kind.as_str() {
-                "song" => client.get_songs_by_ids(&[id.as_str()]).await,
-                "album" => client
-                    .get_album_by_id(&id)
-                    .await
-                    .map(|album| album.songs.unwrap_or_default()),
-                "artist" => {
-                    client
-                        .get_artist_top_songs(&id, "", 0, None, None, None)
-                        .await
-                }
-                _ => client
-                    .get_playlist_by_id(&id, 50, 0)
-                    .await
-                    .map(|playlist| playlist.songs.unwrap_or_default()),
-            }
-        });
+        let result = data::runtime_handle()
+            .block_on(async { fetch_songs_by_kind(&data::client(), &kind, &id).await });
         match result {
             Ok(queue) if !queue.is_empty() => Message::PlaySong(queue, 0),
+            _ => Message::Noop,
+        }
+    });
+}
+
+/// Fetch a song/album/playlist/artist's songs in the background to
+/// queue them right after the current song (Play next).
+fn spawn_play_next_by_kind(context: &ComponentContext<Shell>, kind: String, id: String) {
+    context.spawn_background(move |_| {
+        let result = data::runtime_handle()
+            .block_on(async { fetch_songs_by_kind(&data::client(), &kind, &id).await });
+        match result {
+            Ok(queue) if !queue.is_empty() => Message::PlayNext(queue),
             _ => Message::Noop,
         }
     });
@@ -280,6 +335,16 @@ fn spawn_details_load(context: &ComponentContext<Shell>, target: DetailsTarget) 
     });
 }
 
+/// Load a Properties dialog's content in the background (same data
+/// as the details page).
+fn spawn_properties_load(context: &ComponentContext<Shell>, target: DetailsTarget) {
+    context.spawn_background(move |_| {
+        let result =
+            data::runtime_handle().block_on(async { load_details(&data::client(), &target).await });
+        Message::PropertiesLoaded(result.map_err(|err| err.to_string()))
+    });
+}
+
 /// Poll the player every 500ms while a song is loaded.
 fn spawn_tick(context: &ComponentContext<Shell>) {
     context.spawn_background(move |_| {
@@ -319,6 +384,9 @@ impl Component for Shell {
             page: Page::Home,
             details: None,
             back_page: Page::Home,
+            hovered_card: None,
+            menu: None,
+            properties: None,
             pane_open: true,
             search_text: String::new(),
             search_suggestions: Vec::new(),
@@ -543,17 +611,7 @@ impl Component for Shell {
                 spawn_play_by_kind(context, kind, id);
             }
             Message::OpenDetails(target) => {
-                if self.page != Page::Details {
-                    self.back_page = self.page;
-                }
-                self.page = Page::Details;
-                self.details = Some(DetailsState {
-                    target: target.clone(),
-                    loading: true,
-                    error: None,
-                    content: None,
-                });
-                spawn_details_load(context, target);
+                self.open_details(context, target);
             }
             Message::DetailsLoaded(result) => {
                 if let Some(details) = &mut self.details {
@@ -563,6 +621,71 @@ impl Component for Shell {
                         Err(err) => details.error = Some(err),
                     }
                 }
+            }
+            Message::CardHover(id) => {
+                self.hovered_card = id;
+            }
+            Message::CardPressed(target, info) => {
+                if info.is_right_button_pressed {
+                    self.open_menu(target, info.window_x, info.window_y);
+                } else if info.is_left_button_pressed {
+                    self.open_details(context, target);
+                }
+            }
+            Message::OpenMenu(target, x, y) => {
+                self.open_menu(target, x, y);
+            }
+            Message::CloseOverlay => {
+                self.menu = None;
+                self.properties = None;
+            }
+            Message::MenuPlay(target) => {
+                self.menu = None;
+                spawn_play_by_kind(context, target.kind, target.id);
+            }
+            Message::MenuPlayNext(target) => {
+                self.menu = None;
+                spawn_play_next_by_kind(context, target.kind, target.id);
+            }
+            Message::MenuProperties(target) => {
+                self.menu = None;
+                self.properties = Some(PropertiesState {
+                    target: target.clone(),
+                    loading: true,
+                    error: None,
+                    content: None,
+                });
+                spawn_properties_load(context, target);
+            }
+            Message::PlayNext(songs) => {
+                if songs.is_empty() {
+                    // Nothing queued; ignore.
+                } else if self.player.has_current() {
+                    self.player.insert_next(songs);
+                } else {
+                    // Nothing playing: play the queued songs now.
+                    let quality = Quality::from_setting(self.settings.quality);
+                    self.player.load_queue(songs, 0, quality);
+                    if let Some(song) = self.player.current() {
+                        self.library.push_recent(song.clone());
+                    }
+                    self.playing = true;
+                    self.position = 0.0;
+                    self.duration = self.player.duration_secs();
+                    spawn_tick(context);
+                }
+            }
+            Message::PropertiesLoaded(result) => {
+                if let Some(properties) = &mut self.properties {
+                    properties.loading = false;
+                    match result {
+                        Ok(content) => properties.content = Some(content),
+                        Err(err) => properties.error = Some(err),
+                    }
+                }
+            }
+            Message::CloseProperties => {
+                self.properties = None;
             }
             Message::Back => {
                 self.page = self.back_page;
@@ -686,17 +809,202 @@ impl Component for Shell {
 
         let player_bar = self.player_bar(context);
 
-        Grid::new()
+        let shell_grid = Grid::new()
             .rows([
                 GridLength::Auto,
                 GridLength::Star(1.0),
                 GridLength::Pixel(90.0),
             ])
-            .children((title_bar, navigation, player_bar))
+            .children((title_bar, navigation, player_bar));
+
+        // Overlay layer (context menu / Properties dialog) sits in
+        // the same root cell, painted above the shell. It only
+        // exists while a menu or dialog is open.
+        if self.menu.is_none() && self.properties.is_none() {
+            return shell_grid;
+        }
+        let mut root: Vec<KeyedView> = vec![KeyedView::new("shell", shell_grid)];
+        root.push(KeyedView::new("overlay", self.overlay_view(context)));
+        Grid::new()
+            .rows([GridLength::Star(1.0)])
+            .keyed_children(root)
     }
 }
 
 impl Shell {
+    /// The overlay layer: a click-away layer plus the open menu /
+    /// Properties dialog. The click-away layer is a *sibling* of the
+    /// menu and dialog (not their parent), so presses on the menu
+    /// itself never reach it.
+    fn overlay_view(&self, context: &mut ViewContext<Self>) -> View {
+        let mut layers: Vec<KeyedView> = vec![KeyedView::new(
+            "dismiss",
+            Border::new()
+                .background(Brush::Solid(Color::transparent()))
+                .on_pointer_pressed(
+                    context.callback(|_info: PointerEventInfo| Message::CloseOverlay),
+                ),
+        )];
+        if let Some(menu) = &self.menu {
+            layers.push(KeyedView::new("menu", self.menu_view(menu, context)));
+        }
+        if let Some(properties) = &self.properties {
+            layers.push(KeyedView::new(
+                "properties",
+                self.properties_view(properties, context),
+            ));
+        }
+        Grid::new().keyed_children(layers)
+    }
+
+    /// The context menu: Play, Play next, Properties.
+    fn menu_view(&self, menu: &MenuState, context: &mut ViewContext<Self>) -> View {
+        let target = menu.target.clone();
+        let play_target = target.clone();
+        let next_target = target.clone();
+        Border::new()
+            .width(220.0)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .vertical_alignment(VerticalAlignment::Top)
+            .margin(Thickness::new(menu.x, menu.y, 0.0, 0.0))
+            .background(Brush::Theme(ThemeBrush::CardBackground))
+            .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+            .border_thickness(1.0)
+            .corner_radius(CornerRadius::uniform(8.0))
+            .padding(4.0)
+            .content(StackPanel::new().spacing(2.0).children((
+                menu_row("Play", Message::MenuPlay(play_target), context),
+                menu_row("Play next", Message::MenuPlayNext(next_target), context),
+                menu_row("Properties", Message::MenuProperties(target), context),
+            )))
+    }
+
+    /// The Properties dialog: title, type, subtitle, and the loaded
+    /// details (duration/year for songs, song count for collections).
+    fn properties_view(
+        &self,
+        properties: &PropertiesState,
+        context: &mut ViewContext<Self>,
+    ) -> View {
+        let target = &properties.target;
+        let kind_label = match target.kind.as_str() {
+            "song" => "Song",
+            "album" => "Album",
+            "artist" => "Artist",
+            _ => "Playlist",
+        };
+        let mut rows: Vec<KeyedView> = vec![
+            KeyedView::new(
+                "title",
+                TextBlock::new()
+                    .text(target.title.clone())
+                    .font_size(20.0)
+                    .font_weight(FontWeight::SEMI_BOLD)
+                    .text_wrapping(TextWrapping::Wrap),
+            ),
+            KeyedView::new("type", property_row("Type", kind_label)),
+            KeyedView::new("subtitle", property_row("Details", &target.subtitle)),
+        ];
+        if properties.loading {
+            rows.push(KeyedView::new(
+                "loading",
+                ProgressRing::new().is_active(true),
+            ));
+        } else if let Some(err) = &properties.error {
+            rows.push(KeyedView::new(
+                "error",
+                TextBlock::new()
+                    .text(format!("Couldn't load details: {err}"))
+                    .font_size(14.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::Wrap),
+            ));
+        } else if let Some(content) = &properties.content {
+            if let Some(song) = &content.song {
+                if let Some(duration) = song.duration {
+                    rows.push(KeyedView::new(
+                        "duration",
+                        property_row("Duration", &views::fmt_time(duration as f64)),
+                    ));
+                }
+                if let Some(year) = &song.year {
+                    rows.push(KeyedView::new("year", property_row("Year", year)));
+                }
+                if let Some(album) = &song.album.name {
+                    rows.push(KeyedView::new("album", property_row("Album", album)));
+                }
+            } else if !content.songs.is_empty() {
+                rows.push(KeyedView::new(
+                    "count",
+                    property_row("Songs", &content.songs.len().to_string()),
+                ));
+            }
+        }
+        rows.push(KeyedView::new(
+            "close",
+            Button::new()
+                .on_click(context.message(Message::CloseProperties))
+                .content("Close"),
+        ));
+        Border::new()
+            .width(380.0)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center)
+            .background(Brush::Theme(ThemeBrush::CardBackground))
+            .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+            .border_thickness(1.0)
+            .corner_radius(CornerRadius::uniform(12.0))
+            .padding(24.0)
+            .content(StackPanel::new().spacing(12.0).keyed_children(rows))
+    }
+}
+
+/// One context-menu row: a full-width left-aligned text button.
+fn menu_row(label: &str, message: Message, context: &mut ViewContext<Shell>) -> View {
+    Button::new()
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .horizontal_content_alignment(HorizontalAlignment::Left)
+        .on_click(context.message(message))
+        .content(label)
+}
+
+/// One Properties label/value pair.
+fn property_row(label: &str, value: &str) -> View {
+    StackPanel::new().spacing(2.0).children((
+        TextBlock::new().text(label).font_size(12.0).opacity(0.7),
+        TextBlock::new()
+            .text(value)
+            .font_size(14.0)
+            .text_wrapping(TextWrapping::Wrap),
+    ))
+}
+
+impl Shell {
+    /// Open a details page for a card (shared by card clicks and
+    /// the context menu's Play is separate — this is the drill-in).
+    fn open_details(&mut self, context: &ComponentContext<Self>, target: DetailsTarget) {
+        if self.page != Page::Details {
+            self.back_page = self.page;
+        }
+        self.page = Page::Details;
+        self.menu = None;
+        self.details = Some(DetailsState {
+            target: target.clone(),
+            loading: true,
+            error: None,
+            content: None,
+        });
+        spawn_details_load(context, target);
+    }
+
+    /// Open the context menu at window coordinates, clamped so the
+    /// ~220x150 menu stays inside the 1280x800 window.
+    fn open_menu(&mut self, target: DetailsTarget, x: f64, y: f64) {
+        let x = x.clamp(0.0, 1280.0 - 230.0);
+        let y = y.clamp(0.0, 800.0 - 160.0);
+        self.menu = Some(MenuState { target, x, y });
+    }
+
     /// Run the current header/page query through `search_all` and
     /// show the Search page. Shared by the header button and by
     /// choosing a suggestion.

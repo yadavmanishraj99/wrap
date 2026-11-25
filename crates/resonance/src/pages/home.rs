@@ -14,7 +14,12 @@ use crate::views;
 
 /// One section: heading + up to 20 cards in one row (<= 10 items) or
 /// two rows (> 10 items), scrolling horizontally.
-fn section(title: &str, items: &[LaunchItem], context: &mut ViewContext<Shell>) -> View {
+fn section(
+    title: &str,
+    items: &[LaunchItem],
+    shell: &Shell,
+    context: &mut ViewContext<Shell>,
+) -> View {
     let shown: Vec<&LaunchItem> = items.iter().take(20).collect();
     if shown.is_empty() {
         return View::empty();
@@ -23,20 +28,19 @@ fn section(title: &str, items: &[LaunchItem], context: &mut ViewContext<Shell>) 
         let cards: Vec<KeyedView> = slice
             .iter()
             .map(|item| {
+                let target = DetailsTarget {
+                    kind: item.kind.clone(),
+                    id: item.id.clone(),
+                    title: item.title.clone(),
+                    subtitle: item.subtitle.clone().unwrap_or_else(|| item.kind.clone()),
+                    art: views::art_url(&item.image, "500x500"),
+                };
                 KeyedView::new(
                     item.id.clone(),
                     views::media_card(
+                        target,
                         views::art_url(&item.image, "500x500"),
-                        &item.title,
-                        item.subtitle.as_deref().unwrap_or(&item.kind),
-                        160.0,
-                        Message::OpenDetails(DetailsTarget {
-                            kind: item.kind.clone(),
-                            id: item.id.clone(),
-                            title: item.title.clone(),
-                            subtitle: item.subtitle.clone().unwrap_or_default(),
-                            art: views::art_url(&item.image, "500x500"),
-                        }),
+                        shell.hovered_card.as_deref() == Some(item.id.as_str()),
                         context,
                     ),
                 )
@@ -97,10 +101,10 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .text("Home")
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
-            section("Trending now", &home.new_trending, context),
-            section("Top playlists", &home.top_playlists, context),
-            section("New albums", &home.new_albums, context),
-            section("Charts", &home.charts, context),
+            section("Trending now", &home.new_trending, shell, context),
+            section("Top playlists", &home.top_playlists, shell, context),
+            section("New albums", &home.new_albums, shell, context),
+            section("Charts", &home.charts, shell, context),
         ))
     } else {
         TextBlock::new()

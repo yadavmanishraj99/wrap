@@ -9,7 +9,7 @@
 use saavnapi::{DownloadLink, Song};
 use windows_reactor::*;
 
-use crate::app::{Message, Shell};
+use crate::app::{DetailsTarget, Message, Shell};
 
 /// Seconds as `m:ss`.
 pub fn fmt_time(secs: f64) -> String {
@@ -58,49 +58,139 @@ pub fn section_header(title: &str) -> View {
         .into()
 }
 
-/// A clickable media card: artwork, title, subtitle. Clicking sends
-/// `message` (usually `OpenDetails`). Artwork is square, `width`
-/// wide; the title wraps to two lines.
+/// A media card: square art-fill artwork (138px), title and
+/// subtitle (max 2 lines each), everything top-aligned.
+///
+/// Clicking the art or the text opens the details page; right-click
+/// opens the context menu. While hovered, two outlined circular
+/// buttons appear over the art, bottom-left (Play) and bottom-right
+/// (more — opens the context menu). The buttons are siblings of the
+/// artwork, not children of it, so their presses never also trigger
+/// the card's own press handler.
+///
+/// windows-reactor 0.100 note: `Border` is the only view with
+/// pointer events, so every press/hover handler sits on a Border.
 pub fn media_card(
+    target: DetailsTarget,
     art: Option<String>,
-    title: &str,
-    subtitle: &str,
-    width: f64,
-    message: Message,
+    hovered: bool,
     context: &mut ViewContext<Shell>,
 ) -> View {
+    let size = 138.0;
+    let card_press = |t: DetailsTarget, context: &mut ViewContext<Shell>| {
+        context.callback(move |info: PointerEventInfo| Message::CardPressed(t.clone(), info))
+    };
     let art_view: View = match art {
         Some(url) => image_from_url(&url)
-            .width(width)
-            .height(width)
+            .width(size)
+            .height(size)
             .stretch(Stretch::UniformToFill)
             .into(),
-        None => Border::new().width(width).height(width).content(
-            SymbolIcon::new()
-                .symbol(Symbol::Audio)
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        ),
+        None => SymbolIcon::new()
+            .symbol(Symbol::Audio)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
     };
-    Button::new()
-        .width(width)
-        .margin(4.0)
-        .on_click(context.message(message))
-        .content(
-            StackPanel::new().spacing(8.0).children((
-                art_view,
-                TextBlock::new()
-                    .text(title)
-                    .font_size(14.0)
-                    .font_weight(FontWeight::SEMI_BOLD)
-                    .text_wrapping(TextWrapping::Wrap),
-                TextBlock::new()
-                    .text(subtitle)
-                    .font_size(12.0)
-                    .opacity(0.7)
-                    .text_wrapping(TextWrapping::Wrap),
-            )),
+    let mut art_children: Vec<KeyedView> = vec![KeyedView::new(
+        "art",
+        Border::new()
+            .width(size)
+            .height(size)
+            .on_pointer_pressed(card_press(target.clone(), context))
+            .content(art_view),
+    )];
+    if hovered {
+        let play_target = target.clone();
+        art_children.push(KeyedView::new(
+            "play",
+            hover_button(
+                Symbol::Play,
+                HorizontalAlignment::Left,
+                move |_info: PointerEventInfo| {
+                    Message::PlayByKind(play_target.kind.clone(), play_target.id.clone())
+                },
+                context,
+            ),
+        ));
+        let more_target = target.clone();
+        art_children.push(KeyedView::new(
+            "more",
+            hover_button(
+                Symbol::More,
+                HorizontalAlignment::Right,
+                move |info: PointerEventInfo| {
+                    Message::OpenMenu(more_target.clone(), info.window_x, info.window_y)
+                },
+                context,
+            ),
+        ));
+    }
+    let hover_id = target.id.clone();
+    Border::new()
+        .width(size)
+        .background(Brush::Solid(Color::transparent()))
+        .on_pointer_entered(
+            context.callback(move |_info: PointerEventInfo| {
+                Message::CardHover(Some(hover_id.clone()))
+            }),
         )
+        .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::CardHover(None)))
+        .content(
+            StackPanel::new()
+                .vertical_alignment(VerticalAlignment::Top)
+                .children((
+                    Grid::new()
+                        .width(size)
+                        .height(size)
+                        .keyed_children(art_children),
+                    Border::new()
+                        .background(Brush::Solid(Color::transparent()))
+                        .on_pointer_pressed(card_press(target.clone(), context))
+                        .content(
+                            StackPanel::new().children((
+                                TextBlock::new()
+                                    .text(target.title.clone())
+                                    .font_size(14.0)
+                                    .font_weight(FontWeight::SEMI_BOLD)
+                                    .text_wrapping(TextWrapping::Wrap)
+                                    .max_lines(2)
+                                    .margin(4.0),
+                                TextBlock::new()
+                                    .text(target.subtitle.clone())
+                                    .font_size(12.0)
+                                    .opacity(0.7)
+                                    .text_wrapping(TextWrapping::Wrap)
+                                    .max_lines(2)
+                                    .margin(4.0),
+                            )),
+                        ),
+                )),
+        )
+}
+
+/// One outlined circular icon button for the card hover overlay
+/// (36px disc, theme card fill + card-stroke outline). A `Border`
+/// is used because `Button` has no corner radius in 0.100; presses
+/// are pointer presses, and the button is a sibling of the artwork.
+fn hover_button(
+    icon: Symbol,
+    align: HorizontalAlignment,
+    on_press: impl Fn(PointerEventInfo) -> Message + Clone + 'static,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    Border::new()
+        .width(36.0)
+        .height(36.0)
+        .corner_radius(CornerRadius::uniform(18.0))
+        .border_thickness(1.0)
+        .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+        .background(Brush::Theme(ThemeBrush::CardBackground))
+        .horizontal_alignment(align)
+        .vertical_alignment(VerticalAlignment::Bottom)
+        .margin(8.0)
+        .on_pointer_pressed(context.callback(on_press))
+        .content(SymbolIcon::new().symbol(icon))
 }
 
 /// One song row: artwork, title/artist, duration, play + like buttons.
