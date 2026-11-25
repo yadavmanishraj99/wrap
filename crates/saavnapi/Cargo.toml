@@ -3,5 +3,23 @@ name = "saavnapi"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+description = "Unofficial Rust client for JioSaavn, built from scratch against https://www.jiosaavn.com/api.php — no use of the sumitkolhe hosted API (saavn.dev) or its client."
+license = "MIT"
 
 [dependencies]
+base64 = "0.22"
+cipher = "0.4"
+des = "0.8"
+ecb = "0.1"
+# Default features (native-tls) on purpose: rustls + webpki-roots does not
+# trust this environment's egress-proxy CA, so live calls failed with
+# InvalidCertificate(UnknownIssuer). native-tls uses the system CA bundle,
+# like curl does, and works here.
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
