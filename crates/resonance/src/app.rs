@@ -19,7 +19,7 @@
 
 use std::time::Duration;
 
-use saavnapi::{LaunchData, Song};
+use saavnapi::{LaunchData, LaunchItem, Song};
 use windows_reactor::*;
 
 use crate::data;
@@ -92,6 +92,18 @@ pub enum Message {
     VolumeChanged(f64),
     Tick,
     ToggleLike(Song),
+    PlayLaunchItem(LaunchItem),
+    RetryHome,
+    Noop,
+}
+
+/// Load the Home launch data in the background.
+fn spawn_home_load(context: &ComponentContext<Shell>) {
+    context.spawn_background(move |_| {
+        let result =
+            data::runtime_handle().block_on(async { data::client().get_launch_data(None).await });
+        Message::HomeLoaded(result.map_err(|err| err.to_string()))
+    });
 }
 
 /// Poll the player every 500ms while a song is loaded.
@@ -127,11 +139,7 @@ impl Component for Shell {
         player.set_volume(settings.volume);
 
         // Home data loads in the background as the shell opens.
-        context.spawn_background(move |_| {
-            let result = data::runtime_handle()
-                .block_on(async { data::client().get_launch_data(None).await });
-            Message::HomeLoaded(result.map_err(|err| err.to_string()))
-        });
+        spawn_home_load(context);
 
         Self {
             page: Page::Home,
@@ -251,6 +259,34 @@ impl Component for Shell {
             Message::ToggleLike(song) => {
                 self.library.toggle_like(song);
             }
+            Message::PlayLaunchItem(item) => {
+                context.spawn_background(move |_| {
+                    let result = data::runtime_handle().block_on(async {
+                        let client = data::client();
+                        match item.kind.as_str() {
+                            "song" => client.get_songs_by_ids(&[item.id.as_str()]).await,
+                            "album" => client
+                                .get_album_by_id(&item.id)
+                                .await
+                                .map(|album| album.songs.unwrap_or_default()),
+                            _ => client
+                                .get_playlist_by_id(&item.id, 50, 0)
+                                .await
+                                .map(|playlist| playlist.songs.unwrap_or_default()),
+                        }
+                    });
+                    match result {
+                        Ok(queue) if !queue.is_empty() => Message::PlaySong(queue, 0),
+                        _ => Message::Noop,
+                    }
+                });
+            }
+            Message::RetryHome => {
+                self.home_loading = true;
+                self.home_error = None;
+                spawn_home_load(context);
+            }
+            Message::Noop => {}
         }
     }
 
