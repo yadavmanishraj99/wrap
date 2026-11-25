@@ -18,6 +18,12 @@ fn song_subtitle(hit: &SearchHit) -> String {
 }
 
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
+    // A details drill-in is an inner route of this page: when one
+    // is open it renders here, inside the page, instead of the
+    // page's own content.
+    if shell.details.is_some() {
+        return super::details::view(shell, context);
+    }
     let search_box = AutoSuggestBox::new()
         .text(shell.search_text.clone())
         .placeholder_text("Search songs, albums, artists, playlists...")

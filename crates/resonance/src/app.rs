@@ -35,20 +35,13 @@ pub enum Page {
     Search,
     Library,
     Settings,
-    Details,
     Queue,
 }
 
-impl Page {
-    fn from_tag(tag: Option<String>) -> Self {
-        match tag.as_deref() {
-            Some("search") => Self::Search,
-            Some("library") => Self::Library,
-            Some("settings") => Self::Settings,
-            _ => Self::Home,
-        }
-    }
-}
+// NOTE: there is deliberately no `Details` page here. Details are
+// an inner route of the page they were opened from (Home, Search
+// or Library), not a top-level nav route — the sidebar only ever
+// holds the few routes above.
 
 /// What a details page was opened for (from a media card).
 #[derive(Debug, Clone)]
@@ -422,7 +415,11 @@ impl Component for Shell {
 
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
         match message {
-            Message::Navigate(page) => self.page = page,
+            Message::Navigate(page) => {
+                self.page = page;
+                // Switching top-level pages leaves a details drill-in.
+                self.details = None;
+            }
             Message::TogglePane => self.pane_open = !self.pane_open,
             Message::PaneOpenChanged(open) => self.pane_open = open,
             Message::ToggleTheme => {
@@ -443,6 +440,9 @@ impl Component for Shell {
                 // overwrite results for newer text.
                 let query = text.trim().to_string();
                 if query.len() >= 2 {
+                    // Typing shows search results, not a stale
+                    // details drill-in from another page.
+                    self.details = None;
                     if self.page != Page::Search {
                         self.page = Page::Search;
                     }
@@ -569,6 +569,9 @@ impl Component for Shell {
                 if self.page != Page::Queue {
                     self.back_page = self.page;
                 }
+                // The queue replaces whatever is showing, details
+                // drill-in included.
+                self.details = None;
                 self.page = Page::Queue;
             }
             Message::SetTheme(theme) => {
@@ -718,8 +721,13 @@ impl Component for Shell {
                 self.properties = None;
             }
             Message::Back => {
-                self.page = self.back_page;
-                self.details = None;
+                if self.details.is_some() {
+                    // Close the inner details route; stay on the
+                    // same page it was opened from.
+                    self.details = None;
+                } else if self.page == Page::Queue {
+                    self.page = self.back_page;
+                }
             }
             Message::RetryHome => {
                 self.home_loading = true;
@@ -755,7 +763,7 @@ impl Component for Shell {
             Theme::System => "Theme: System",
         };
 
-        let on_drill_in = self.page == Page::Details || self.page == Page::Queue;
+        let on_drill_in = self.details.is_some() || self.page == Page::Queue;
         let title_bar = TitleBar::new()
             .preferred_height(WindowTitleBarHeight::Tall)
             .title("Resonance")
@@ -788,7 +796,6 @@ impl Component for Shell {
             Page::Search => pages::search::view(self, context),
             Page::Library => pages::library::view(self, context),
             Page::Settings => pages::settings::view(self, context),
-            Page::Details => pages::details::view(self, context),
             Page::Queue => pages::queue::view(self, context),
         };
 
@@ -844,7 +851,19 @@ impl Component for Shell {
             .is_pane_open(self.pane_open)
             .on_is_pane_open_changed(context.callback(Message::PaneOpenChanged))
             .on_selected_tag_changed(
-                context.callback(|tag: Option<String>| Message::Navigate(Page::from_tag(tag))),
+                context.callback(|tag: Option<String>| match tag.as_deref() {
+                    Some("home") => Message::Navigate(Page::Home),
+                    Some("search") => Message::Navigate(Page::Search),
+                    Some("library") => Message::Navigate(Page::Library),
+                    // A null or unknown tag means the selection was
+                    // cleared — a drill-in page (Queue) or the Settings
+                    // footer, neither of which is a nav item — and that
+                    // is not a navigation. Mapping null to Home used to
+                    // bounce every drill-in straight back to Home the
+                    // moment it opened, so the click looked like it did
+                    // nothing.
+                    _ => Message::Noop,
+                }),
             )
             .grid_row(1)
             .slots([
@@ -1041,10 +1060,12 @@ impl Shell {
     /// Open a details page for a card (shared by card clicks and
     /// the context menu's Play is separate — this is the drill-in).
     fn open_details(&mut self, context: &ComponentContext<Self>, target: DetailsTarget) {
-        if self.page != Page::Details {
-            self.back_page = self.page;
-        }
-        self.page = Page::Details;
+        // Details is an inner route of the current page, not a
+        // top-level nav route: the page stays mounted (and stays
+        // selected in the sidebar) and the details render inside
+        // it. Changing `page` here used to deselect the sidebar
+        // item, and the selection-cleared event bounced straight
+        // back to Home — so the click looked like it did nothing.
         self.menu = None;
         self.details = Some(DetailsState {
             target: target.clone(),
@@ -1072,6 +1093,9 @@ impl Shell {
             return;
         }
         self.page = Page::Search;
+        // Choosing a suggestion shows results, not a stale
+        // details drill-in.
+        self.details = None;
         self.search_loading = true;
         self.search_error = None;
         context.spawn_background(move |_| {

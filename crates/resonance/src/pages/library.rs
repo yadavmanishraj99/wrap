@@ -83,6 +83,12 @@ fn playlist_targets(playlists: &[Playlist]) -> Vec<DetailsTarget> {
 }
 
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
+    // A details drill-in is an inner route of this page: when one
+    // is open it renders here, inside the page, instead of the
+    // page's own content.
+    if shell.details.is_some() {
+        return super::details::view(shell, context);
+    }
     ScrollViewer::new().content(
         StackPanel::new().margin(24.0).spacing(32.0).children((
             TextBlock::new()
