@@ -1091,31 +1091,17 @@ impl Component for Shell {
             Page::Queue => pages::queue::view(self, context),
         };
 
-        // Settings sits in the pane footer, at the very bottom of
-        // the sidebar — not with the other navigation items. (0.100
-        // has no FooterMenuItems slot.) It is a real NavigationViewItem,
-        // the same component as Home/Search/Library, so it gets the
-        // same hover, selection indicator, and icon + label layout —
-        // not a hand-built Border, which never felt like the rest.
-        // A NavigationViewItem in the PaneFooter still participates
-        // in the NavigationView's selection, so its tag routes
-        // through the same on_selected_tag_changed callback.
-        let settings_footer = NavigationViewItem::new()
-            .tag("settings")
-            .is_selected(self.page == Page::Settings)
-            .selects_on_invoked(true)
-            .slots([
-                SlotView::new(NavigationViewItemSlot::Content, "Settings".to_string()),
-                SlotView::new(
-                    NavigationViewItemSlot::Icon,
-                    SymbolIcon::new().symbol(Symbol::Setting),
-                ),
-            ]);
-
         // The nav list: Home, Search, Library, then — only while
         // pinned items exist — a divider and the pinned rows below
         // it. A pinned row is a shortcut, not a page, so it never
-        // changes the nav selection.
+        // changes the nav selection. Settings is last in the list:
+        // it was a NavigationViewItem in the PaneFooter, but a footer
+        // item never fires the NavigationView's selection callback,
+        // so clicking it did nothing. In the MenuItems list it is a
+        // real nav item like the rest, and its tag routes through the
+        // same on_selected_tag_changed callback. (0.100 has no
+        // FooterMenuItems slot, so the footer cannot hold a working
+        // nav item.)
         let mut menu_items: Vec<KeyedView> = vec![
             nav_item("home", "Home", Symbol::Home, self.page == Page::Home),
             nav_item("search", "Search", Symbol::Find, self.page == Page::Search),
@@ -1132,6 +1118,14 @@ impl Component for Shell {
                 menu_items.push(pinned_nav_item(pinned, context));
             }
         }
+        // Settings last in the nav list (see above — the PaneFooter
+        // cannot hold a working nav item).
+        menu_items.push(nav_item(
+            "settings",
+            "Settings",
+            Symbol::Setting,
+            self.page == Page::Settings,
+        ));
 
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)
@@ -1159,7 +1153,6 @@ impl Component for Shell {
             .grid_row(1)
             .slots([
                 SlotView::collection(NavigationViewSlot::MenuItems, menu_items),
-                SlotView::new(NavigationViewSlot::PaneFooter, settings_footer),
                 SlotView::new(NavigationViewSlot::Content, page_view),
             ]);
 
