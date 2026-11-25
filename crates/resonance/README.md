@@ -119,7 +119,8 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 - **Context menu** — right-click (or the hover more button) on any
   Home card: Play, Play next (queues right after the current song,
   or starts playing when nothing is), Properties (title, type,
-  duration/year/album or song count in a dialog). This is a custom
+  duration/year/album or song count in a dialog), Pin / Unpin (pins
+  the item to the sidebar, or removes it). This is a custom
   overlay (a Border in the shell's overlay layer), not a native
   WinUI MenuFlyout/ContentDialog — Reactor 0.100 does expose a
   native `Menu` and `ContentDialog`, but the native menu only opens
@@ -130,6 +131,17 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   `Border` in windows-reactor 0.100, so every press/hover handler
   sits on a Border and the menu's click-away layer is a sibling of
   the menu, never its parent.
+- **Pinning** — any song, artist, album, playlist, or chart can be
+  pinned from its card's context menu (Pin / Unpin). Pinned items
+  appear in the sidebar below a divider after Library, in pin order,
+  each as a row with its art (28px) + title + subtitle. They persist
+  in `library.json`. A pinned row is a shortcut, not a page: clicking
+  it never changes the nav selection. A pinned song plays on click
+  (its full Song is fetched by id first); any other pinned item opens
+  its details page. The divider shows only while pinned items exist.
+  Reactor 0.100 has no NavigationViewItemSeparator, so the divider is
+  a NavigationViewItem with a 1px line as its content and
+  `selects_on_invoked(false)`.
 - **Playback disposal** — when a track starts, the previous track's
   `MediaSource` is closed explicitly (`Close()` releases its stream
   and network resources at once) instead of leaving it to COM
@@ -141,7 +153,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 
 | Page | Status |
 | --- | --- |
-| Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties). Cards with no art show a placeholder tile (music-note icon on a solid fill). Clicking a song card plays it; any other card opens its page |
+| Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties, Pin/Unpin). Cards with no art show a placeholder tile (music-note icon on a solid fill). Clicking a song card plays it; any other card opens its page |
 | Details | Live — one page per kind, each with its own layout: Artist (circular art, followers, Play, Top songs, Top albums, Similar artists), Album (art, clickable artist names, year • songs, Play, Like), Playlist / Chart (art, description, Play, Like), Song (art, clickable artists, Play, Like, lyrics when available); title-bar back button returns. Song cards never open this page — they just play. Details are an inner-route stack: opening a details page from inside another details page pushes a new entry, and Back walks back through each one in reverse order (Home → album → album → artist → back → back → back → Home), instead of dropping straight to the page |
 | Queue | Live — the queue panel over the Now Playing sidebar (from its Show full queue button); playing a row starts the queue there; song titles wrap |
 | Now Playing | Live — an opaque 340px sidebar on the right (a solid fill, so the page never bleeds through it). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which appears at once; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |

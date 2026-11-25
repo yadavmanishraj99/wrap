@@ -134,12 +134,30 @@ impl Settings {
     }
 }
 
+/// A pinned media item (song, artist, album, playlist, or chart) —
+/// shown in the sidebar below the Library divider. Just enough to
+/// render the row and open/play it; the full object is fetched on
+/// demand (a pinned song is fetched by id when clicked to play).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinnedItem {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub art: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Library {
     pub liked_songs: Vec<Song>,
     pub liked_albums: Vec<Album>,
     pub liked_playlists: Vec<Playlist>,
     pub recent_songs: Vec<Song>,
+    /// Pinned media items, in pin order (first pinned at the top of
+    /// the sidebar section). `#[serde(default)]` so a library.json
+    /// written before pinning existed still loads.
+    #[serde(default)]
+    pub pinned: Vec<PinnedItem>,
 }
 
 impl Library {
@@ -214,6 +232,28 @@ impl Library {
         self.recent_songs.insert(0, song);
         self.recent_songs.truncate(50);
         self.save();
+    }
+
+    /// Is this item pinned?
+    pub fn is_pinned(&self, kind: &str, id: &str) -> bool {
+        self.pinned.iter().any(|p| p.kind == kind && p.id == id)
+    }
+
+    /// Toggle an item's pinned state. Returns the new pinned state.
+    pub fn toggle_pin(&mut self, item: PinnedItem) -> bool {
+        if let Some(pos) = self
+            .pinned
+            .iter()
+            .position(|p| p.kind == item.kind && p.id == item.id)
+        {
+            self.pinned.remove(pos);
+            self.save();
+            false
+        } else {
+            self.pinned.push(item);
+            self.save();
+            true
+        }
     }
 }
 

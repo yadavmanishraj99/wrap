@@ -28,7 +28,7 @@ use windows_reactor::*;
 use crate::data;
 use crate::pages;
 use crate::player::{Player, Quality, SmtcCommand};
-use crate::store::{Library, Material, QualitySetting, RepeatMode, Settings, Theme};
+use crate::store::{Library, Material, PinnedItem, QualitySetting, RepeatMode, Settings, Theme};
 use crate::views;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,6 +198,11 @@ pub enum Message {
     MenuPlay(DetailsTarget),
     MenuPlayNext(DetailsTarget),
     MenuProperties(DetailsTarget),
+    /// Pin or unpin a media item (from the card context menu).
+    TogglePin(DetailsTarget),
+    /// Play a pinned song by id (its sidebar row only stores the id,
+    /// so the full Song is fetched first).
+    PlayPinnedSong(String),
     PlayNext(Vec<Song>),
     PropertiesLoaded(Result<DetailsContent, String>),
     CloseProperties,
@@ -263,6 +268,20 @@ fn spawn_play_by_kind(context: &ComponentContext<Shell>, kind: String, id: Strin
             .block_on(async { fetch_songs_by_kind(&data::client(), &kind, &id).await });
         match result {
             Ok(queue) if !queue.is_empty() => Message::PlaySong(queue, 0),
+            _ => Message::Noop,
+        }
+    });
+}
+
+/// Fetch one pinned song by id and play it. A pinned song's sidebar
+/// row only stores the id, so the full Song (with its stream URLs)
+/// is fetched on click. Failures are silent (Noop).
+fn spawn_play_pinned_song(context: &ComponentContext<Shell>, id: String) {
+    context.spawn_background(move |_| {
+        let result = data::runtime_handle()
+            .block_on(async { data::client().get_songs_by_ids(&[id.as_str()]).await });
+        match result {
+            Ok(songs) if !songs.is_empty() => Message::PlaySong(songs, 0),
             _ => Message::Noop,
         }
     });
@@ -462,6 +481,110 @@ fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
                 SlotView::new(NavigationViewItemSlot::Content, label.to_string()),
                 SlotView::new(NavigationViewItemSlot::Icon, SymbolIcon::new().symbol(icon)),
             ]),
+    )
+}
+
+/// The divider after Library: a 1px line in a nav-item row. It is a
+/// NavigationViewItem (Reactor 0.100 has no NavigationViewItemSeparator)
+/// with `selects_on_invoked(false)`, so clicking it never selects
+/// anything. Shown only while pinned items exist.
+fn nav_divider() -> KeyedView {
+    KeyedView::new(
+        "pinned-divider".to_string(),
+        NavigationViewItem::new()
+            .selects_on_invoked(false)
+            .slots([SlotView::new(
+                NavigationViewItemSlot::Content,
+                Border::new()
+                    .height(1.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .margin(Thickness::new(12.0, 8.0, 12.0, 8.0))
+                    .background(Brush::Theme(ThemeBrush::CardStroke)),
+            )]),
+    )
+}
+
+/// One pinned item as a nav row: 28px art + title/subtitle, in a
+/// Border so the whole row is clickable. A pinned item is a shortcut,
+/// not a page — `selects_on_invoked(false)` so clicking it never
+/// changes the nav selection; the Border's pointer press opens/plays
+/// it instead. A pinned song plays on click; any other kind opens
+/// its details page.
+fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> KeyedView {
+    let item = pinned.clone();
+    let message = if item.kind == "song" {
+        Message::PlayPinnedSong(item.id.clone())
+    } else {
+        Message::OpenDetails(DetailsTarget {
+            kind: item.kind.clone(),
+            id: item.id.clone(),
+            title: item.title.clone(),
+            subtitle: item.subtitle.clone(),
+            art: item.art.clone(),
+        })
+    };
+    let art: View = match &item.art {
+        Some(url) => views::image_from_url(url).width(28.0).height(28.0).into(),
+        None => Border::new()
+            .width(28.0)
+            .height(28.0)
+            .background(Brush::Theme(ThemeBrush::CardBackground))
+            .content(
+                SymbolIcon::new()
+                    .symbol(Symbol::Audio)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            ),
+    };
+    let mut text_children: Vec<KeyedView> = vec![KeyedView::new(
+        "title",
+        TextBlock::new()
+            .text(item.title.clone())
+            .font_size(12.0)
+            .text_wrapping(TextWrapping::NoWrap)
+            .text_trimming(TextTrimming::CharacterEllipsis)
+            .max_lines(1),
+    )];
+    if !item.subtitle.is_empty() {
+        text_children.push(KeyedView::new(
+            "subtitle",
+            TextBlock::new()
+                .text(item.subtitle.clone())
+                .font_size(11.0)
+                .opacity(0.7)
+                .text_wrapping(TextWrapping::NoWrap)
+                .text_trimming(TextTrimming::CharacterEllipsis)
+                .max_lines(1),
+        ));
+    }
+    let row = Border::new()
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .background(Brush::Solid(Color::transparent()))
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                message.clone()
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            StackPanel::new()
+                .orientation(Orientation::Horizontal)
+                .spacing(8.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .children((
+                    art,
+                    StackPanel::new()
+                        .spacing(0.0)
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .keyed_children(text_children),
+                )),
+        );
+    KeyedView::new(
+        format!("pin-{}-{}", item.kind, item.id),
+        NavigationViewItem::new()
+            .selects_on_invoked(false)
+            .slots([SlotView::new(NavigationViewItemSlot::Content, row)]),
     )
 }
 
@@ -863,6 +986,20 @@ impl Component for Shell {
                 });
                 spawn_properties_load(context, target);
             }
+            Message::TogglePin(target) => {
+                self.menu = None;
+                let item = PinnedItem {
+                    kind: target.kind.clone(),
+                    id: target.id.clone(),
+                    title: target.title.clone(),
+                    subtitle: target.subtitle.clone(),
+                    art: target.art.clone(),
+                };
+                self.library.toggle_pin(item);
+            }
+            Message::PlayPinnedSong(id) => {
+                spawn_play_pinned_song(context, id);
+            }
             Message::PlayNext(songs) => {
                 if songs.is_empty() {
                     // Nothing queued; ignore.
@@ -1016,6 +1153,27 @@ impl Component for Shell {
                     )),
             );
 
+        // The nav list: Home, Search, Library, then — only while
+        // pinned items exist — a divider and the pinned rows below
+        // it. A pinned row is a shortcut, not a page, so it never
+        // changes the nav selection.
+        let mut menu_items: Vec<KeyedView> = vec![
+            nav_item("home", "Home", Symbol::Home, self.page == Page::Home),
+            nav_item("search", "Search", Symbol::Find, self.page == Page::Search),
+            nav_item(
+                "library",
+                "Library",
+                Symbol::Audio,
+                self.page == Page::Library,
+            ),
+        ];
+        if !self.library.pinned.is_empty() {
+            menu_items.push(nav_divider());
+            for pinned in &self.library.pinned {
+                menu_items.push(pinned_nav_item(pinned, context));
+            }
+        }
+
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)
             .is_pane_toggle_button_visible(false)
@@ -1041,19 +1199,7 @@ impl Component for Shell {
             )
             .grid_row(1)
             .slots([
-                SlotView::collection(
-                    NavigationViewSlot::MenuItems,
-                    vec![
-                        nav_item("home", "Home", Symbol::Home, self.page == Page::Home),
-                        nav_item("search", "Search", Symbol::Find, self.page == Page::Search),
-                        nav_item(
-                            "library",
-                            "Library",
-                            Symbol::Audio,
-                            self.page == Page::Library,
-                        ),
-                    ],
-                ),
+                SlotView::collection(NavigationViewSlot::MenuItems, menu_items),
                 SlotView::new(NavigationViewSlot::PaneFooter, settings_footer),
                 SlotView::new(NavigationViewSlot::Content, page_view),
             ]);
@@ -1142,6 +1288,12 @@ impl Shell {
         let target = menu.target.clone();
         let play_target = target.clone();
         let next_target = target.clone();
+        let pin_target = target.clone();
+        let pin_label = if self.library.is_pinned(&target.kind, &target.id) {
+            "Unpin"
+        } else {
+            "Pin"
+        };
         Border::new()
             .width(220.0)
             .horizontal_alignment(HorizontalAlignment::Left)
@@ -1157,6 +1309,7 @@ impl Shell {
                 menu_row("Play", Message::MenuPlay(play_target), context),
                 menu_row("Play next", Message::MenuPlayNext(next_target), context),
                 menu_row("Properties", Message::MenuProperties(target), context),
+                menu_row(pin_label, Message::TogglePin(pin_target), context),
             )))
     }
 
@@ -1310,7 +1463,7 @@ impl Shell {
             0.0
         };
         let y = if y.is_finite() {
-            y.clamp(0.0, 800.0 - 160.0)
+            y.clamp(0.0, 800.0 - 180.0)
         } else {
             0.0
         };
