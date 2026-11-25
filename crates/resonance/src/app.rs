@@ -107,6 +107,8 @@ pub struct Shell {
     pub menu: Option<MenuState>,
     /// Open Properties dialog, if any.
     pub properties: Option<PropertiesState>,
+    /// The Now Playing sidebar on the right is open.
+    pub now_playing_open: bool,
     pub pane_open: bool,
     pub search_text: String,
     pub search_suggestions: Vec<String>,
@@ -162,6 +164,7 @@ pub enum Message {
     PropertiesLoaded(Result<DetailsContent, String>),
     CloseProperties,
     OpenQueue,
+    ToggleNowPlaying,
     ToggleShuffle,
     CycleRepeat,
     ToggleMute,
@@ -393,6 +396,7 @@ impl Component for Shell {
             hovered_card: None,
             menu: None,
             properties: None,
+            now_playing_open: false,
             pane_open: true,
             search_text: String::new(),
             search_suggestions: Vec::new(),
@@ -570,9 +574,14 @@ impl Component for Shell {
                     self.back_page = self.page;
                 }
                 // The queue replaces whatever is showing, details
-                // drill-in included.
+                // drill-in included — and the Now Playing sidebar
+                // closes, since the full queue is the queue view.
                 self.details = None;
                 self.page = Page::Queue;
+                self.now_playing_open = false;
+            }
+            Message::ToggleNowPlaying => {
+                self.now_playing_open = !self.now_playing_open;
             }
             Message::SetTheme(theme) => {
                 self.settings.theme = theme;
@@ -886,13 +895,28 @@ impl Component for Shell {
 
         let player_bar = self.player_bar(context);
 
+        // The Now Playing sidebar rides in the shell grid's content
+        // row, painted above the NavigationView (it covers the right
+        // of the page) and below the menu/dialog overlay. It lives in
+        // row 1, so it never covers the title bar or the player bar.
+        let mut shell_children: Vec<KeyedView> = vec![
+            KeyedView::new("titlebar", title_bar),
+            KeyedView::new("navigation", navigation),
+            KeyedView::new("playerbar", player_bar),
+        ];
+        if self.now_playing_open {
+            shell_children.push(KeyedView::new(
+                "nowplaying",
+                self.now_playing_sidebar(context),
+            ));
+        }
         let shell_grid = Grid::new()
             .rows([
                 GridLength::Auto,
                 GridLength::Star(1.0),
                 GridLength::Pixel(96.0),
             ])
-            .children((title_bar, navigation, player_bar));
+            .keyed_children(shell_children);
 
         // Overlay layer (context menu / Properties dialog) sits in
         // the same root cell, painted above the shell. It only
@@ -1114,6 +1138,10 @@ impl Shell {
         self.position = self.player.position_secs();
         self.duration = self.player.duration_secs();
         if self.player.has_current() {
+            // A track starting opens the Now Playing sidebar, so the
+            // details are there the moment media plays. Hiding it is
+            // a toggle; the next track start opens it again.
+            self.now_playing_open = true;
             spawn_tick(context);
         }
     }
@@ -1318,6 +1346,9 @@ impl Shell {
             .margin(8.0)
             .grid_column(2)
             .children((
+                Button::new()
+                    .on_click(context.message(Message::ToggleNowPlaying))
+                    .content("Now playing"),
                 lyrics_button,
                 Button::new()
                     .on_click(context.message(Message::OpenQueue))
@@ -1351,5 +1382,238 @@ impl Shell {
             .margin(8.0)
             .grid_row(2)
             .children((left, center, right))
+    }
+
+    /// The Now Playing sidebar: a 340px panel on the right of the
+    /// content row, shown when media starts playing. Top to bottom:
+    /// a Next-in-queue card (with a button for the full queue), then
+    /// the now-playing details — big art, title, clickable artists,
+    /// album, Like. The close button and the player bar's Now playing
+    /// toggle hide it; the next track start opens it again.
+    fn now_playing_sidebar(&self, context: &mut ViewContext<Self>) -> View {
+        let mut rows: Vec<KeyedView> = vec![KeyedView::new(
+            "header",
+            Grid::new()
+                .columns([GridLength::Star(1.0), GridLength::Auto])
+                .children((
+                    TextBlock::new()
+                        .text("Now playing")
+                        .font_size(20.0)
+                        .font_weight(FontWeight::SEMI_BOLD)
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .grid_column(0),
+                    Button::new()
+                        .grid_column(1)
+                        .on_click(context.message(Message::ToggleNowPlaying))
+                        .content("×"),
+                )),
+        )];
+
+        // Next in the queue, on top of the now-playing details.
+        rows.push(KeyedView::new(
+            "nextlabel",
+            TextBlock::new()
+                .text("Next in the queue")
+                .font_size(14.0)
+                .font_weight(FontWeight::SEMI_BOLD),
+        ));
+        let next_index = self.player.index.map(|i| i + 1);
+        let next_song = next_index.and_then(|i| self.player.queue.get(i));
+        match next_song {
+            Some(song) => {
+                let queue = self.player.queue.clone();
+                let idx = next_index.unwrap_or(0);
+                let art: View = match views::art_url(&song.image, "150x150") {
+                    Some(url) => views::image_from_url(&url)
+                        .width(48.0)
+                        .height(48.0)
+                        .stretch(Stretch::UniformToFill)
+                        .into(),
+                    None => Border::new().width(48.0).height(48.0).content(
+                        SymbolIcon::new()
+                            .symbol(Symbol::Audio)
+                            .horizontal_alignment(HorizontalAlignment::Center)
+                            .vertical_alignment(VerticalAlignment::Center),
+                    ),
+                };
+                rows.push(KeyedView::new(
+                    "next",
+                    Border::new()
+                        .background(Brush::Theme(ThemeBrush::CardBackground))
+                        .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+                        .border_thickness(1.0)
+                        .corner_radius(CornerRadius::uniform(8.0))
+                        .padding(12.0)
+                        .on_pointer_pressed(context.callback(move |_info: PointerEventInfo| {
+                            Message::PlaySong(queue.clone(), idx)
+                        }))
+                        .content(
+                            StackPanel::new()
+                                .orientation(Orientation::Horizontal)
+                                .spacing(12.0)
+                                .children((
+                                    art,
+                                    StackPanel::new()
+                                        .vertical_alignment(VerticalAlignment::Center)
+                                        .children((
+                                            TextBlock::new()
+                                                .text(song.name.clone())
+                                                .font_size(14.0)
+                                                .font_weight(FontWeight::SEMI_BOLD)
+                                                .text_wrapping(TextWrapping::Wrap),
+                                            TextBlock::new()
+                                                .text(views::artist_names(song))
+                                                .font_size(12.0)
+                                                .opacity(0.7)
+                                                .text_wrapping(TextWrapping::Wrap),
+                                        )),
+                                )),
+                        ),
+                ));
+            }
+            None => {
+                rows.push(KeyedView::new(
+                    "nextempty",
+                    TextBlock::new()
+                        .text("Nothing next in the queue.")
+                        .font_size(14.0)
+                        .opacity(0.7),
+                ));
+            }
+        }
+        rows.push(KeyedView::new(
+            "fullqueue",
+            Button::new()
+                .on_click(context.message(Message::OpenQueue))
+                .content("Show full queue"),
+        ));
+
+        // Now-playing details.
+        match self.player.current() {
+            Some(song) => {
+                let art: View = match views::art_url(&song.image, "500x500") {
+                    Some(url) => Border::new()
+                        .width(308.0)
+                        .height(308.0)
+                        .corner_radius(CornerRadius::uniform(8.0))
+                        .content(
+                            views::image_from_url(&url)
+                                .width(308.0)
+                                .height(308.0)
+                                .stretch(Stretch::UniformToFill),
+                        ),
+                    None => Border::new()
+                        .width(308.0)
+                        .height(308.0)
+                        .corner_radius(CornerRadius::uniform(8.0))
+                        .background(Brush::Theme(ThemeBrush::SolidBackground))
+                        .content(
+                            SymbolIcon::new()
+                                .symbol(Symbol::Audio)
+                                .horizontal_alignment(HorizontalAlignment::Center)
+                                .vertical_alignment(VerticalAlignment::Center),
+                        ),
+                };
+                rows.push(KeyedView::new("art", art));
+                rows.push(KeyedView::new(
+                    "title",
+                    TextBlock::new()
+                        .text(song.name.clone())
+                        .font_size(20.0)
+                        .font_weight(FontWeight::SEMI_BOLD)
+                        .text_wrapping(TextWrapping::Wrap)
+                        .max_lines(2),
+                ));
+                rows.push(KeyedView::new(
+                    "artists",
+                    views::artist_links(&song.artists, 2, 44, context),
+                ));
+                match (&song.album.id, &song.album.name) {
+                    (Some(id), Some(name)) => {
+                        let target = DetailsTarget {
+                            kind: "album".to_string(),
+                            id: id.clone(),
+                            title: name.clone(),
+                            subtitle: String::new(),
+                            art: None,
+                        };
+                        rows.push(KeyedView::new(
+                            "album",
+                            Border::new()
+                                .background(Brush::Solid(Color::transparent()))
+                                .on_pointer_pressed(context.callback(
+                                    move |_info: PointerEventInfo| {
+                                        Message::OpenDetails(target.clone())
+                                    },
+                                ))
+                                .content(
+                                    TextBlock::new()
+                                        .text(name.clone())
+                                        .font_size(14.0)
+                                        .opacity(0.8),
+                                ),
+                        ));
+                    }
+                    (None, Some(name)) => {
+                        rows.push(KeyedView::new(
+                            "album",
+                            TextBlock::new()
+                                .text(name.clone())
+                                .font_size(14.0)
+                                .opacity(0.8),
+                        ));
+                    }
+                    _ => {}
+                }
+                let liked = self.library.is_liked(&song.id);
+                rows.push(KeyedView::new(
+                    "like",
+                    Button::new()
+                        .on_click(context.message(Message::ToggleLike(song.clone())))
+                        .content(
+                            StackPanel::new()
+                                .orientation(Orientation::Horizontal)
+                                .spacing(8.0)
+                                .children((
+                                    SymbolIcon::new().symbol(if liked {
+                                        Symbol::Favorite
+                                    } else {
+                                        Symbol::Add
+                                    }),
+                                    TextBlock::new()
+                                        .text(if liked { "Liked" } else { "Like" })
+                                        .font_size(14.0),
+                                )),
+                        ),
+                ));
+            }
+            None => {
+                rows.push(KeyedView::new(
+                    "empty",
+                    TextBlock::new()
+                        .text("Nothing playing yet — play a song to see it here.")
+                        .font_size(14.0)
+                        .opacity(0.7)
+                        .text_wrapping(TextWrapping::Wrap),
+                ));
+            }
+        }
+
+        Border::new()
+            .grid_row(1)
+            .width(340.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .background(Brush::Theme(ThemeBrush::CardBackground))
+            .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+            .border_thickness(1.0)
+            .content(
+                ScrollViewer::new().content(
+                    StackPanel::new()
+                        .margin(16.0)
+                        .spacing(16.0)
+                        .keyed_children(rows),
+                ),
+            )
     }
 }
