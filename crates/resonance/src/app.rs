@@ -19,7 +19,7 @@
 
 use std::time::Duration;
 
-use saavnapi::{LaunchData, LaunchItem, Song};
+use saavnapi::{LaunchData, LaunchItem, SearchAll, Song};
 use windows_reactor::*;
 
 use crate::data;
@@ -60,10 +60,11 @@ pub struct Shell {
     pub page: Page,
     pub pane_open: bool,
     pub search_text: String,
+    pub search_suggestions: Vec<String>,
     pub home: Option<LaunchData>,
     pub home_loading: bool,
     pub home_error: Option<String>,
-    pub search_results: Vec<Song>,
+    pub search_all: Option<SearchAll>,
     pub search_loading: bool,
     pub search_error: Option<String>,
     pub library: Library,
@@ -82,8 +83,10 @@ pub enum Message {
     ToggleTheme,
     SearchTextChanged(String),
     SearchSubmitted,
+    SuggestionChosen(String),
+    SuggestionsLoaded(String, Vec<String>),
     HomeLoaded(Result<LaunchData, String>),
-    SearchLoaded(Result<Vec<Song>, String>),
+    SearchAllLoaded(Result<SearchAll, String>),
     PlaySong(Vec<Song>, usize),
     PlayPause,
     Next,
@@ -93,6 +96,7 @@ pub enum Message {
     Tick,
     ToggleLike(Song),
     PlayLaunchItem(LaunchItem),
+    PlayByKind(String, String),
     RetryHome,
     Noop,
 }
@@ -103,6 +107,36 @@ fn spawn_home_load(context: &ComponentContext<Shell>) {
         let result =
             data::runtime_handle().block_on(async { data::client().get_launch_data(None).await });
         Message::HomeLoaded(result.map_err(|err| err.to_string()))
+    });
+}
+
+/// Fetch a song/album/playlist/artist's songs in the background and
+/// start the queue at the first song. Failures are silent (Noop).
+fn spawn_play_by_kind(context: &ComponentContext<Shell>, kind: String, id: String) {
+    context.spawn_background(move |_| {
+        let result = data::runtime_handle().block_on(async {
+            let client = data::client();
+            match kind.as_str() {
+                "song" => client.get_songs_by_ids(&[id.as_str()]).await,
+                "album" => client
+                    .get_album_by_id(&id)
+                    .await
+                    .map(|album| album.songs.unwrap_or_default()),
+                "artist" => {
+                    client
+                        .get_artist_top_songs(&id, "", 0, None, None, None)
+                        .await
+                }
+                _ => client
+                    .get_playlist_by_id(&id, 50, 0)
+                    .await
+                    .map(|playlist| playlist.songs.unwrap_or_default()),
+            }
+        });
+        match result {
+            Ok(queue) if !queue.is_empty() => Message::PlaySong(queue, 0),
+            _ => Message::Noop,
+        }
     });
 }
 
@@ -145,10 +179,11 @@ impl Component for Shell {
             page: Page::Home,
             pane_open: true,
             search_text: String::new(),
+            search_suggestions: Vec::new(),
             home: None,
             home_loading: true,
             home_error: None,
-            search_results: Vec::new(),
+            search_all: None,
             search_loading: false,
             search_error: None,
             library,
@@ -173,21 +208,42 @@ impl Component for Shell {
                 };
                 self.settings.save();
             }
-            Message::SearchTextChanged(text) => self.search_text = text,
-            Message::SearchSubmitted => {
-                let query = self.search_text.trim().to_string();
-                if query.is_empty() {
-                    return;
+            Message::SearchTextChanged(text) => {
+                self.search_text = text.clone();
+                // Live suggestions from the top-query section. The
+                // query rides along so a slow reply can't overwrite
+                // suggestions for newer text.
+                let query = text.trim().to_string();
+                if query.len() >= 2 {
+                    context.spawn_background(move |_| {
+                        let titles = data::runtime_handle()
+                            .block_on(async { data::client().search_all(&query).await })
+                            .map(|all| {
+                                all.top_query
+                                    .results
+                                    .iter()
+                                    .map(|hit| hit.title.clone())
+                                    .take(8)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        Message::SuggestionsLoaded(query, titles)
+                    });
+                } else {
+                    self.search_suggestions.clear();
                 }
-                self.page = Page::Search;
-                self.search_loading = true;
-                self.search_error = None;
-                context.spawn_background(move |_| {
-                    let result = data::runtime_handle()
-                        .block_on(async { data::client().search_songs(&query, 0, 20).await })
-                        .map(|page| page.results);
-                    Message::SearchLoaded(result.map_err(|err| err.to_string()))
-                });
+            }
+            Message::SuggestionsLoaded(query, titles) => {
+                if query == self.search_text.trim() {
+                    self.search_suggestions = titles;
+                }
+            }
+            Message::SuggestionChosen(text) => {
+                self.search_text = text;
+                self.submit_search(context);
+            }
+            Message::SearchSubmitted => {
+                self.submit_search(context);
             }
             Message::HomeLoaded(result) => {
                 self.home_loading = false;
@@ -196,10 +252,10 @@ impl Component for Shell {
                     Err(err) => self.home_error = Some(err),
                 }
             }
-            Message::SearchLoaded(result) => {
+            Message::SearchAllLoaded(result) => {
                 self.search_loading = false;
                 match result {
-                    Ok(songs) => self.search_results = songs,
+                    Ok(all) => self.search_all = Some(all),
                     Err(err) => self.search_error = Some(err),
                 }
             }
@@ -260,26 +316,10 @@ impl Component for Shell {
                 self.library.toggle_like(song);
             }
             Message::PlayLaunchItem(item) => {
-                context.spawn_background(move |_| {
-                    let result = data::runtime_handle().block_on(async {
-                        let client = data::client();
-                        match item.kind.as_str() {
-                            "song" => client.get_songs_by_ids(&[item.id.as_str()]).await,
-                            "album" => client
-                                .get_album_by_id(&item.id)
-                                .await
-                                .map(|album| album.songs.unwrap_or_default()),
-                            _ => client
-                                .get_playlist_by_id(&item.id, 50, 0)
-                                .await
-                                .map(|playlist| playlist.songs.unwrap_or_default()),
-                        }
-                    });
-                    match result {
-                        Ok(queue) if !queue.is_empty() => Message::PlaySong(queue, 0),
-                        _ => Message::Noop,
-                    }
-                });
+                spawn_play_by_kind(context, item.kind, item.id);
+            }
+            Message::PlayByKind(kind, id) => {
+                spawn_play_by_kind(context, kind, id);
             }
             Message::RetryHome => {
                 self.home_loading = true;
@@ -395,6 +435,24 @@ impl Component for Shell {
 }
 
 impl Shell {
+    /// Run the current header/page query through `search_all` and
+    /// show the Search page. Shared by the header button and by
+    /// choosing a suggestion.
+    fn submit_search(&mut self, context: &ComponentContext<Self>) {
+        let query = self.search_text.trim().to_string();
+        if query.is_empty() {
+            return;
+        }
+        self.page = Page::Search;
+        self.search_loading = true;
+        self.search_error = None;
+        context.spawn_background(move |_| {
+            let result =
+                data::runtime_handle().block_on(async { data::client().search_all(&query).await });
+            Message::SearchAllLoaded(result.map_err(|err| err.to_string()))
+        });
+    }
+
     /// Shared bookkeeping after Next/Previous/auto-advance.
     fn after_track_change(&mut self, context: &ComponentContext<Self>) {
         if let Some(song) = self.player.current() {
