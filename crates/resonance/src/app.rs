@@ -1668,6 +1668,7 @@ impl Component for Shell {
         let title_bar = TitleBar::new()
             .preferred_height(WindowTitleBarHeight::Tall)
             .title("Resonance")
+            .subtitle("Experimental")
             .is_back_button_visible(on_drill_in)
             .is_back_button_enabled(on_drill_in)
             .on_back_requested(context.message(Message::Back))
