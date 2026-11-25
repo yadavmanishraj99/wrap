@@ -33,8 +33,18 @@ pub fn art_url(links: &[DownloadLink], quality: &str) -> Option<String> {
 
 /// Build an `Image` from a URL; an invalid URL yields a blank image
 /// instead of an error (`Image::source` validates the URI).
+/// An `Image` for a URL. When the image is already in the disk
+/// cache, the cached file is used (so Home and details pages do
+/// not re-download the same art on every visit); otherwise the
+/// remote URL is used and the image is cached in the background
+/// the next time the page's data loads.
 pub fn image_from_url(url: &str) -> Image {
-    Image::new().source(url).unwrap_or_else(|_| Image::new())
+    let cache = crate::image_cache::cache_dir(&crate::store::app_dir());
+    let source = match crate::image_cache::lookup(&cache, url) {
+        Some(path) => crate::download::file_uri(&path),
+        None => url.to_string(),
+    };
+    Image::new().source(source).unwrap_or_else(|_| Image::new())
 }
 
 /// Comma-joined primary artist names, or "Unknown artist".

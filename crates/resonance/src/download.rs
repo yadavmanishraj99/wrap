@@ -70,6 +70,66 @@ pub struct DownloadItem {
     pub subfolder: String,
     /// The song's art URL (for the Downloads playlist cards).
     pub art: Option<String>,
+    /// The album name, when known (for offline browsing).
+    pub album: Option<String>,
+    /// The song length in seconds, when known.
+    pub duration: Option<u64>,
+    /// The locally cached art image path, when the art has been
+    /// downloaded (so the art shows offline).
+    pub local_image: Option<String>,
+}
+
+impl DownloadItem {
+    /// Rebuild a `Song` from the stored download, for offline use
+    /// (a downloaded collection's song list, the Downloads
+    /// playlist). The art prefers the locally cached image (a
+    /// `file://` URI) so it shows offline; the audio URL is empty
+    /// because the player plays the local file instead.
+    pub fn to_song(&self) -> saavnapi::Song {
+        let image_url = match &self.local_image {
+            Some(path) => file_uri(std::path::Path::new(path)),
+            None => self.art.clone().unwrap_or_default(),
+        };
+        saavnapi::Song {
+            id: self.song_id.clone(),
+            name: self.title.clone(),
+            kind: "song".to_string(),
+            year: None,
+            release_date: None,
+            duration: self.duration,
+            label: None,
+            explicit_content: false,
+            play_count: None,
+            language: String::new(),
+            has_lyrics: false,
+            lyrics_id: None,
+            url: String::new(),
+            copyright: None,
+            album: saavnapi::SongAlbum {
+                id: None,
+                name: self.album.clone(),
+                url: None,
+            },
+            artists: saavnapi::ArtistGroups {
+                primary: vec![saavnapi::ArtistMap {
+                    id: String::new(),
+                    name: self.artist.clone(),
+                    role: String::new(),
+                    kind: "artist".to_string(),
+                    image: Vec::new(),
+                    url: String::new(),
+                }],
+                featured: Vec::new(),
+                all: Vec::new(),
+            },
+            image: vec![saavnapi::DownloadLink {
+                quality: "500x500".to_string(),
+                url: image_url,
+            }],
+            download_url: Vec::new(),
+            encrypted_media_url: None,
+        }
+    }
 }
 
 /// One collection's download (an album, playlist or chart).
@@ -99,6 +159,9 @@ pub enum DownloadEvent {
     },
     Completed {
         song_id: String,
+        /// The locally cached art image path, when the art was
+        /// downloaded (so the art shows offline).
+        local_image: Option<String>,
     },
     Failed {
         song_id: String,
@@ -113,6 +176,11 @@ pub struct DownloadManager {
     pub items: HashMap<String, DownloadItem>,
     /// By collection id.
     pub collections: HashMap<String, CollectionDownload>,
+    /// Which songs belong to each collection, in order (by
+    /// collection id). This is what makes a downloaded album /
+    /// playlist / artist's song list available offline.
+    #[serde(default)]
+    pub collection_songs: HashMap<String, Vec<String>>,
     /// Where files go (not persisted — set at startup).
     #[serde(skip)]
     pub download_dir: PathBuf,
@@ -123,6 +191,7 @@ impl DownloadManager {
         Self {
             items: HashMap::new(),
             collections: HashMap::new(),
+            collection_songs: HashMap::new(),
             download_dir,
         }
     }
@@ -243,8 +312,10 @@ impl DownloadManager {
             let _ = tx.execute(
                 "INSERT OR REPLACE INTO downloads
                  (song_id, title, artist, collection_id, url, total_bytes,
-                  downloaded_bytes, status, error, file_name, subfolder, art)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  downloaded_bytes, status, error, file_name, subfolder, art,
+                  album, duration, local_image)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                         ?13, ?14, ?15)",
                 rusqlite::params![
                     item.song_id,
                     item.title,
@@ -258,6 +329,9 @@ impl DownloadManager {
                     item.file_name,
                     item.subfolder,
                     item.art,
+                    item.album,
+                    item.duration.map(|n| n as i64),
+                    item.local_image,
                 ],
             );
         }
@@ -279,6 +353,18 @@ impl DownloadManager {
                     collection.art,
                 ],
             );
+        }
+        // The collection -> songs mapping (which songs belong to
+        // each downloaded album / playlist / artist), so a
+        // downloaded collection's song list is available offline.
+        for (collection_id, song_ids) in &self.collection_songs {
+            for (position, song_id) in song_ids.iter().enumerate() {
+                let _ = tx.execute(
+                    "INSERT OR REPLACE INTO collection_songs
+                     (collection_id, song_id, position) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![collection_id, song_id, position as i64],
+                );
+            }
         }
         let _ = tx.commit();
     }
@@ -311,7 +397,17 @@ impl DownloadManager {
                 .collections
                 .insert(collection.id.clone(), collection);
         }
+        manager.collection_songs = load_collection_songs(&conn);
         manager
+    }
+
+    /// The downloaded songs of a collection, in order, from the
+    /// stored mapping (available offline).
+    pub fn collection_song_ids(&self, collection_id: &str) -> Vec<String> {
+        self.collection_songs
+            .get(collection_id)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -321,7 +417,8 @@ fn load_items(conn: &rusqlite::Connection) -> Vec<DownloadItem> {
     let Ok(mut stmt) = conn.prepare(
         "SELECT song_id, title, artist, collection_id, url,
                 total_bytes, downloaded_bytes, status, error,
-                file_name, subfolder, art FROM downloads",
+                file_name, subfolder, art, album, duration, local_image
+                FROM downloads",
     ) else {
         return Vec::new();
     };
@@ -339,11 +436,34 @@ fn load_items(conn: &rusqlite::Connection) -> Vec<DownloadItem> {
             file_name: row.get(9)?,
             subfolder: row.get(10)?,
             art: row.get(11)?,
+            album: row.get(12)?,
+            duration: row.get::<_, Option<i64>>(13)?.map(|n| n as u64),
+            local_image: row.get(14)?,
         })
     }) else {
         return Vec::new();
     };
     rows.flatten().collect()
+}
+
+/// The collection -> songs mapping (which songs belong to each
+/// downloaded collection, in order).
+fn load_collection_songs(conn: &rusqlite::Connection) -> HashMap<String, Vec<String>> {
+    let mut mapping: HashMap<String, Vec<String>> = HashMap::new();
+    let Ok(mut stmt) =
+        conn.prepare("SELECT collection_id, song_id FROM collection_songs ORDER BY position")
+    else {
+        return mapping;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return mapping;
+    };
+    for (collection_id, song_id) in rows.flatten() {
+        mapping.entry(collection_id).or_default().push(song_id);
+    }
+    mapping
 }
 
 /// All downloaded collections in the database.
@@ -394,7 +514,10 @@ pub fn open_db(app_dir: &std::path::Path) -> Result<rusqlite::Connection, rusqli
             error TEXT,
             file_name TEXT NOT NULL,
             subfolder TEXT NOT NULL,
-            art TEXT
+            art TEXT,
+            album TEXT,
+            duration INTEGER,
+            local_image TEXT
         );
         CREATE TABLE IF NOT EXISTS collections (
             id TEXT PRIMARY KEY,
@@ -406,6 +529,12 @@ pub fn open_db(app_dir: &std::path::Path) -> Result<rusqlite::Connection, rusqli
             downloaded_bytes INTEGER NOT NULL,
             status TEXT NOT NULL,
             art TEXT
+        );
+        CREATE TABLE IF NOT EXISTS collection_songs (
+            collection_id TEXT NOT NULL,
+            song_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (collection_id, song_id)
         );",
     )?;
     Ok(conn)
@@ -470,6 +599,63 @@ pub fn song_file_name(artist: &str, title: &str) -> String {
         base
     };
     format!("{base}.mp3")
+}
+
+/// A `file://` URI for a local path, so a `MediaSource` or an
+/// `Image` can load a downloaded file or cached art. Each path
+/// segment is percent-encoded (spaces become `%20` and so on);
+/// backslashes become forward slashes.
+pub fn file_uri(path: &std::path::Path) -> String {
+    let mut uri = String::from("file:///");
+    for (i, part) in path.components().enumerate() {
+        let part = part.as_os_str().to_string_lossy();
+        if i > 0 {
+            uri.push('/');
+        }
+        for ch in part.chars() {
+            match ch {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | ':' => {
+                    uri.push(ch);
+                }
+                _ => {
+                    let mut buf = [0u8; 4];
+                    for byte in ch.encode_utf8(&mut buf).as_bytes() {
+                        uri.push_str(&format!("%{byte:02X}"));
+                    }
+                }
+            }
+        }
+    }
+    uri
+}
+
+/// The locally cached art image for a song, under
+/// `<download_dir>/covers/<song_id>.jpg`.
+pub fn image_cache_path(download_dir: &std::path::Path, song_id: &str) -> PathBuf {
+    download_dir.join("covers").join(format!("{song_id}.jpg"))
+}
+
+/// Download a song's art image into the local cache, so the art
+/// shows offline. Returns the local path on success, `None` when
+/// there is no art URL or the download fails (art is best-effort).
+async fn cache_image(item: &DownloadItem, download_dir: &std::path::Path) -> Option<String> {
+    let url = item.art.as_ref()?;
+    let path = image_cache_path(download_dir, &item.song_id);
+    if path.exists() {
+        return Some(path.to_string_lossy().into_owned());
+    }
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let response = reqwest::Client::new().get(url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let bytes = response.bytes().await.ok()?;
+    if tokio::fs::write(&path, &bytes).await.is_err() {
+        return None;
+    }
+    Some(path.to_string_lossy().into_owned())
 }
 
 /// Download one song, resuming a partial file and retrying on
@@ -621,6 +807,8 @@ pub async fn download_song(
             }
             let _ = tokio::fs::remove_file(&part_path).await;
         }
+        // Cache the art image alongside, so it shows offline.
+        let local_image = cache_image(&item, &manager.download_dir).await;
         let _ = events
             .send(DownloadEvent::Progress {
                 song_id: item.song_id.clone(),
@@ -631,6 +819,7 @@ pub async fn download_song(
         let _ = events
             .send(DownloadEvent::Completed {
                 song_id: item.song_id.clone(),
+                local_image,
             })
             .await;
         return Ok(());

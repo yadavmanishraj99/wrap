@@ -15,6 +15,7 @@
 mod app;
 mod data;
 mod download;
+mod image_cache;
 mod pages;
 mod player;
 mod store;

@@ -6,6 +6,8 @@
 //! device, headless test run) degrades to a no-op player instead of
 //! crashing the app.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 
 use saavnapi::Song;
@@ -107,6 +109,11 @@ pub struct Player {
     /// releases its stream and network resources at once, instead
     /// of leaving them to COM refcounting when the player moves on.
     current_source: Option<MediaSource>,
+    /// Downloaded songs by id, mapped to their local file path.
+    /// When a song is in here, `play_current` plays the local file
+    /// instead of streaming — so a downloaded song plays offline.
+    /// The Shell keeps this in sync with the download queue.
+    local_paths: HashMap<String, PathBuf>,
     pub queue: Vec<Song>,
     pub index: Option<usize>,
 }
@@ -121,11 +128,19 @@ impl Player {
             smtc_rx: Some(rx),
             repeat_all: false,
             current_source: None,
+            local_paths: HashMap::new(),
             queue: Vec::new(),
             index: None,
         };
         player.setup_smtc(tx);
         player
+    }
+
+    /// Record a downloaded song's local file, so it plays from disk
+    /// instead of streaming. Called by the Shell whenever a download
+    /// completes (and on startup, for the persisted queue).
+    pub fn set_local_path(&mut self, song_id: String, path: PathBuf) {
+        self.local_paths.insert(song_id, path);
     }
 
     /// Tell the player whether repeat-all is on, so the session's
@@ -309,10 +324,16 @@ impl Player {
         let Some(song) = self.current() else {
             return Ok(());
         };
-        let Some(url) = pick_url(song, quality) else {
-            return Ok(());
+        // A downloaded song plays from its local file, so it works
+        // offline. Otherwise it streams from the quality URL.
+        let uri = if let Some(path) = self.local_paths.get(&song.id) {
+            Uri::CreateUri(&HSTRING::from(crate::download::file_uri(path)))?
+        } else {
+            let Some(url) = pick_url(song, quality) else {
+                return Ok(());
+            };
+            Uri::CreateUri(&HSTRING::from(url))?
         };
-        let uri = Uri::CreateUri(&HSTRING::from(url))?;
         let source = MediaSource::CreateFromUri(&uri)?;
         player.SetSource(&source)?;
         // Dispose the previous track's source now that the player

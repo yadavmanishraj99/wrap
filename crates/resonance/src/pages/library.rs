@@ -99,7 +99,8 @@ fn artist_targets(artists: &[Artist]) -> Vec<DetailsTarget> {
 }
 
 /// The auto "Downloads" playlist: individually downloaded songs
-/// (a collection download stays with its album / playlist).
+/// (a collection download stays with its album / playlist). The
+/// art prefers the locally cached image, so it shows offline.
 fn download_targets(shell: &Shell) -> Vec<DetailsTarget> {
     shell
         .downloads
@@ -110,7 +111,10 @@ fn download_targets(shell: &Shell) -> Vec<DetailsTarget> {
             id: item.song_id.clone(),
             title: item.title.clone(),
             subtitle: item.artist.clone(),
-            art: item.art.clone(),
+            art: match &item.local_image {
+                Some(path) => Some(crate::download::file_uri(std::path::Path::new(path))),
+                None => item.art.clone(),
+            },
         })
         .collect()
 }

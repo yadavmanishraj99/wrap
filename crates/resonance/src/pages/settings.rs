@@ -25,6 +25,27 @@ fn radio(
         .content(label)
 }
 
+/// A labeled toggle switch row (label + ToggleSwitch).
+fn toggle_row(
+    label: &str,
+    is_on: bool,
+    message: fn(bool) -> Message,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    StackPanel::new()
+        .orientation(Orientation::Horizontal)
+        .spacing(12.0)
+        .children((
+            TextBlock::new()
+                .text(label)
+                .font_size(14.0)
+                .vertical_alignment(VerticalAlignment::Center),
+            ToggleSwitch::new()
+                .is_on(is_on)
+                .on_toggled(context.callback(move |on: bool| message(on))),
+        ))
+}
+
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     let settings = &shell.settings;
 
@@ -135,6 +156,92 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                             .is_on(settings.autoplay)
                             .on_toggled(context.callback(|on: bool| Message::SetAutoplay(on))),
                     )),
+            )),
+            StackPanel::new().spacing(8.0).children((
+                views::section_header("Downloads"),
+                TextBlock::new()
+                    .text("Downloaded songs play from disk, so they work offline.")
+                    .font_size(12.0)
+                    .opacity(0.7),
+                toggle_row(
+                    "Download liked songs, albums and playlists",
+                    settings.auto_download_liked,
+                    Message::SetAutoDownloadLiked,
+                    context,
+                ),
+                toggle_row(
+                    "Download pinned items",
+                    settings.auto_download_pinned,
+                    Message::SetAutoDownloadPinned,
+                    context,
+                ),
+                toggle_row(
+                    "Download recently played songs (up to 100)",
+                    settings.auto_download_recent,
+                    Message::SetAutoDownloadRecent,
+                    context,
+                ),
+                StackPanel::new().spacing(8.0).children((
+                    TextBlock::new()
+                        .text("Download quality (separate from stream quality)")
+                        .font_size(14.0),
+                    radio(
+                        QualitySetting::High.label(),
+                        "download-quality",
+                        settings.download_quality == QualitySetting::High,
+                        Message::SetDownloadQuality(QualitySetting::High),
+                        context,
+                    ),
+                    radio(
+                        QualitySetting::Medium.label(),
+                        "download-quality",
+                        settings.download_quality == QualitySetting::Medium,
+                        Message::SetDownloadQuality(QualitySetting::Medium),
+                        context,
+                    ),
+                    radio(
+                        QualitySetting::Low.label(),
+                        "download-quality",
+                        settings.download_quality == QualitySetting::Low,
+                        Message::SetDownloadQuality(QualitySetting::Low),
+                        context,
+                    ),
+                )),
+                StackPanel::new().spacing(8.0).children((
+                    TextBlock::new()
+                        .text(
+                            "Image cache size (album art, so images are not downloaded every time)",
+                        )
+                        .font_size(14.0),
+                    radio(
+                        "100 MB",
+                        "image-cache",
+                        settings.image_cache_limit_mb == 100,
+                        Message::SetImageCacheLimitMb(100),
+                        context,
+                    ),
+                    radio(
+                        "250 MB",
+                        "image-cache",
+                        settings.image_cache_limit_mb == 250,
+                        Message::SetImageCacheLimitMb(250),
+                        context,
+                    ),
+                    radio(
+                        "500 MB",
+                        "image-cache",
+                        settings.image_cache_limit_mb == 500,
+                        Message::SetImageCacheLimitMb(500),
+                        context,
+                    ),
+                    radio(
+                        "1 GB",
+                        "image-cache",
+                        settings.image_cache_limit_mb == 1024,
+                        Message::SetImageCacheLimitMb(1024),
+                        context,
+                    ),
+                )),
             )),
             StackPanel::new().spacing(8.0).children((
                 views::section_header("About"),

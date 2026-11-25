@@ -243,9 +243,12 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 Live — a song, album, playlist or artist can be downloaded for offline listening:
 
 - **Where the button is:** album / playlist / artist / song pages have a Download button in the action row; everywhere else (media cards, song rows, pinned rows) Download lives in the context menu (right-click, or the More button). The details-page button also shows the download state (a filled check once downloaded, dimmed while downloading).
-- **What downloads:** a single song goes into the auto **Downloads** playlist in the Library. A full album / playlist downloads every song into a folder named after it. An artist downloads their top songs and creates a playlist for them under the artist's name (**Downloaded artists** in the Library). Files go to `%USERPROFILE%\Music\Resonance` (a collection gets its own subfolder), named `Artist - Title.mp3`, at the quality set in Settings.
-- **Progress:** a downloading song shows a circular progress ring with a download arrow in the middle, centered on its art (song rows and media cards). A downloading collection shows its overall progress ("Downloading X of Y songs" + a bar) above the song list on its page, while each song row shows its own progress on its art. A song downloaded on its own shows progress only on itself — the collection page shows nothing. A downloaded song gets a filled circle check at the start of its subtitle (song rows and media cards).
-- **Resilience:** downloads write to a `.part` file and resume from it (HTTP `Range`) after a failure or an app restart, retrying up to 3 times with a backoff. The queue is persisted in SQLite (`%LOCALAPPDATA%\Resonance\resonance.db`, tables `downloads` + `collections`), so an interrupted download resumes on the next launch.
+- **What downloads:** a single song goes into the auto **Downloads** playlist in the Library. A full album / playlist downloads every song into a folder named after it. An artist downloads their top songs and creates a playlist for them under the artist's name (**Downloaded artists** in the Library). Files go to `%USERPROFILE%\Music\Resonance` (a collection gets its own subfolder), named `Artist - Title.mp3`, at the download quality set in Settings (separate from the stream quality).
+- **Progress:** a downloading song shows a circular progress ring with a download arrow in the middle, centered on its art (song rows and media cards). A downloading collection shows its overall progress ("Downloading X of Y songs" + a bar) above the song list on its page, while each song row shows its own progress on its art. A song downloaded on its own shows progress only on itself — the collection page shows nothing. A downloaded song gets a filled circle check at the start of its subtitle, **everywhere it appears** — song rows, media cards, pinned rows in the sidebar, the player bar, and the Now Playing sidebar.
+- **Resilience:** downloads write to a `.part` file and resume from it (HTTP `Range`) after a failure or an app restart, retrying up to 3 times with a backoff. The queue is persisted in SQLite (`%LOCALAPPDATA%\Resonance\resonance.db`, tables `downloads` + `collections` + `collection_songs`), so an interrupted download resumes on the next launch.
+- **Offline playback:** a downloaded song plays from its local file instead of streaming, so it works with no network. The song's metadata (title, artist, album, duration), its art (cached locally), and the collection → songs mapping are all stored in SQLite, so a downloaded album / playlist / artist opens from the stored data offline — no network needed. The Library's Downloads and Downloaded artists sections work offline too.
+- **Auto-download (Settings → Downloads, all on by default):** liking a song / album / playlist / artist downloads it; pinning an item downloads it; playing a song downloads it (the recent list holds the last 100 songs, and they are downloaded too). Each can be switched off separately.
+- **Image cache (Settings → Downloads):** album art is cached on disk (`%LOCALAPPDATA%\Resonance\image_cache\`), so Home and details pages do not re-download the same image on every visit. The size limit is configurable (100 MB / 250 MB / 500 MB / 1 GB, default 500 MB); past the limit the least-recently-used images are evicted.
 - **Not done yet:** minimizing to the system tray when the app is closed while a download is running. Reactor exposes no window-close event, so a proper minimize-to-tray needs Win32 window subclassing that cannot be verified from the Linux build machine. Closing the app mid-download is safe regardless — the partial file and queue are persisted, and the download resumes on the next launch.
 
 ## Layout
@@ -257,7 +260,10 @@ crates/resonance/src/
               NavigationView + player bar, player polling
   data.rs     shared tokio runtime + saavnapi client
   download.rs download engine + SQLite queue (resonance.db),
-              resume (.part + Range) + retry, Downloads playlist
+              resume (.part + Range) + retry, Downloads playlist,
+              offline song/collection data, art caching
+  image_cache.rs disk cache for album art (Home/details), with a
+              size limit + least-recently-used eviction
   player.rs   MediaPlayer wrapper: queue, play/pause/seek/volume,
               shuffle-upcoming, repeat wrap/restart
   store.rs    Library + Settings persistence (%LOCALAPPDATA%),

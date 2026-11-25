@@ -108,6 +108,35 @@ pub struct Settings {
     /// is the fallback, pickable in Settings).
     #[serde(default)]
     pub material: Material,
+    /// Download a song / album / playlist automatically when it is
+    /// liked. On by default.
+    #[serde(default = "default_true")]
+    pub auto_download_liked: bool,
+    /// Download an item automatically when it is pinned to the
+    /// sidebar. On by default.
+    #[serde(default = "default_true")]
+    pub auto_download_pinned: bool,
+    /// Download a song automatically when it is played (it joins
+    /// the recent list). On by default.
+    #[serde(default = "default_true")]
+    pub auto_download_recent: bool,
+    /// How much disk the image cache may use, in megabytes.
+    /// The cache evicts the least-recently-used images past it.
+    #[serde(default = "default_image_cache_limit_mb")]
+    pub image_cache_limit_mb: u64,
+    /// The quality downloaded files are saved at (separate from
+    /// the stream quality — a download can be higher quality than
+    /// the stream, or lower to save space).
+    #[serde(default)]
+    pub download_quality: QualitySetting,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_image_cache_limit_mb() -> u64 {
+    500
 }
 
 impl Default for Settings {
@@ -120,6 +149,11 @@ impl Default for Settings {
             shuffle: false,
             repeat: RepeatMode::Off,
             material: Material::Acrylic,
+            auto_download_liked: true,
+            auto_download_pinned: true,
+            auto_download_recent: true,
+            image_cache_limit_mb: 500,
+            download_quality: QualitySetting::High,
         }
     }
 }
@@ -252,7 +286,7 @@ impl Library {
     pub fn push_recent(&mut self, song: Song) {
         self.recent_songs.retain(|s| s.id != song.id);
         self.recent_songs.insert(0, song);
-        self.recent_songs.truncate(50);
+        self.recent_songs.truncate(100);
         self.save();
     }
 

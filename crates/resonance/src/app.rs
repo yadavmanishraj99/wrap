@@ -253,6 +253,11 @@ pub enum Message {
     SetMaterial(Material),
     SetQuality(QualitySetting),
     SetAutoplay(bool),
+    SetAutoDownloadLiked(bool),
+    SetAutoDownloadPinned(bool),
+    SetAutoDownloadRecent(bool),
+    SetImageCacheLimitMb(u64),
+    SetDownloadQuality(QualitySetting),
     RetryHome,
     Noop,
 }
@@ -448,6 +453,56 @@ fn spawn_properties_load(context: &ComponentContext<Shell>, target: DetailsTarge
     });
 }
 
+/// Cache a page's art images in the background, so the next visit
+/// loads them from disk instead of re-downloading them.
+fn spawn_cache_images(context: &ComponentContext<Shell>, urls: Vec<String>) {
+    if urls.is_empty() {
+        return;
+    }
+    context.spawn_background(move |_| {
+        let cache = crate::image_cache::cache_dir(&crate::store::app_dir());
+        let limit = crate::store::Settings::load().image_cache_limit_mb;
+        data::runtime_handle().block_on(async {
+            crate::image_cache::cache_images(urls, cache, limit).await;
+        });
+        Message::Noop
+    });
+}
+
+/// The art URLs in a Home launch-data response (one per item,
+/// preferring the 500x500 image).
+fn home_image_urls(data: &saavnapi::LaunchData) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut push = |items: &[saavnapi::LaunchItem]| {
+        for item in items {
+            if let Some(url) = crate::views::art_url(&item.image, "500x500") {
+                urls.push(url);
+            }
+        }
+    };
+    push(&data.new_trending);
+    push(&data.top_playlists);
+    push(&data.new_albums);
+    push(&data.charts);
+    push(&data.artist_recos);
+    urls
+}
+
+/// The art URLs in a details response (the header art plus every
+/// song's art).
+fn details_image_urls(content: &DetailsContent) -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Some(url) = &content.art {
+        urls.push(url.clone());
+    }
+    for song in &content.songs {
+        if let Some(url) = crate::views::art_url(&song.image, "500x500") {
+            urls.push(url);
+        }
+    }
+    urls
+}
+
 /// Poll the player every 500ms while a song is loaded.
 fn spawn_tick(context: &ComponentContext<Shell>) {
     context.spawn_background(move |_| {
@@ -581,6 +636,7 @@ fn nav_divider() -> KeyedView {
 fn pinned_nav_item(
     pinned: &PinnedItem,
     hovered: bool,
+    shell: &Shell,
     context: &mut ViewContext<Shell>,
 ) -> KeyedView {
     let item = pinned.clone();
@@ -643,13 +699,40 @@ fn pinned_nav_item(
         .text_wrapping(TextWrapping::NoWrap)
         .text_trimming(TextTrimming::CharacterEllipsis)
         .max_lines(1);
-    let subtitle = TextBlock::new()
-        .text(item.subtitle.clone())
-        .font_size(12.0)
-        .opacity(0.7)
-        .text_wrapping(TextWrapping::NoWrap)
-        .text_trimming(TextTrimming::CharacterEllipsis)
-        .max_lines(1);
+    // A downloaded item gets a filled circle check at the start of
+    // the subtitle.
+    let downloaded = if item.kind == "song" {
+        shell.downloads.is_downloaded(&item.id)
+    } else {
+        shell
+            .downloads
+            .collection(&item.id)
+            .is_some_and(|c| c.status == crate::download::DownloadStatus::Completed)
+    };
+    let subtitle: View = if downloaded && !item.subtitle.is_empty() {
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(4.0)
+            .children((
+                views::downloaded_badge(14.0),
+                TextBlock::new()
+                    .text(item.subtitle.clone())
+                    .font_size(12.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::NoWrap)
+                    .text_trimming(TextTrimming::CharacterEllipsis)
+                    .max_lines(1),
+            ))
+    } else {
+        TextBlock::new()
+            .text(item.subtitle.clone())
+            .font_size(12.0)
+            .opacity(0.7)
+            .text_wrapping(TextWrapping::NoWrap)
+            .text_trimming(TextTrimming::CharacterEllipsis)
+            .max_lines(1)
+            .into()
+    };
     // Title above subtitle, with a small gap between them; the
     // subtitle is only shown when the item has one.
     let mut text_children: Vec<KeyedView> = vec![KeyedView::new("title", title)];
@@ -801,6 +884,19 @@ impl Component for Shell {
         // Resume any downloads that were interrupted when the app
         // last closed (they were reset to Queued on load).
         shell.resume_downloads(context);
+        // Point the player at the already-downloaded files, so they
+        // play from disk (offline) instead of streaming.
+        let mut shell = shell;
+        let completed: Vec<(String, std::path::PathBuf)> = shell
+            .downloads
+            .items
+            .values()
+            .filter(|item| item.status == DownloadStatus::Completed)
+            .map(|item| (item.song_id.clone(), shell.downloads.file_path(item)))
+            .collect();
+        for (song_id, path) in completed {
+            shell.player.set_local_path(song_id, path);
+        }
         shell
     }
 
@@ -875,6 +971,9 @@ impl Component for Shell {
                 self.home_loading = false;
                 match result {
                     Ok(data) => {
+                        // Cache the section art, so the next visit
+                        // loads it from disk.
+                        spawn_cache_images(context, home_image_urls(&data));
                         self.home = Some(data);
                     }
                     Err(err) => self.home_error = Some(err),
@@ -1037,6 +1136,26 @@ impl Component for Shell {
                 self.settings.autoplay = autoplay;
                 self.settings.save();
             }
+            Message::SetAutoDownloadLiked(on) => {
+                self.settings.auto_download_liked = on;
+                self.settings.save();
+            }
+            Message::SetAutoDownloadPinned(on) => {
+                self.settings.auto_download_pinned = on;
+                self.settings.save();
+            }
+            Message::SetAutoDownloadRecent(on) => {
+                self.settings.auto_download_recent = on;
+                self.settings.save();
+            }
+            Message::SetImageCacheLimitMb(mb) => {
+                self.settings.image_cache_limit_mb = mb;
+                self.settings.save();
+            }
+            Message::SetDownloadQuality(quality) => {
+                self.settings.download_quality = quality;
+                self.settings.save();
+            }
             Message::Tick => {
                 self.position = self.player.position_secs();
                 self.duration = self.player.duration_secs();
@@ -1078,16 +1197,66 @@ impl Component for Shell {
                 self.player.sync_smtc_status();
             }
             Message::ToggleLike(song) => {
-                self.library.toggle_like(song);
+                if self.library.toggle_like(song.clone()) && self.settings.auto_download_liked {
+                    self.update(
+                        Message::DownloadTarget(DetailsTarget {
+                            kind: "song".to_string(),
+                            id: song.id.clone(),
+                            title: song.name.clone(),
+                            subtitle: crate::views::artist_names(&song),
+                            art: crate::views::art_url(&song.image, "500x500"),
+                        }),
+                        context,
+                    );
+                }
             }
             Message::ToggleLikeAlbum(album) => {
-                self.library.toggle_like_album(album);
+                if self.library.toggle_like_album(album.clone())
+                    && self.settings.auto_download_liked
+                {
+                    self.update(
+                        Message::DownloadTarget(DetailsTarget {
+                            kind: "album".to_string(),
+                            id: album.id.clone(),
+                            title: album.name.clone(),
+                            subtitle: String::new(),
+                            art: crate::views::art_url(&album.image, "500x500"),
+                        }),
+                        context,
+                    );
+                }
             }
             Message::ToggleLikePlaylist(playlist) => {
-                self.library.toggle_like_playlist(playlist);
+                if self.library.toggle_like_playlist(playlist.clone())
+                    && self.settings.auto_download_liked
+                {
+                    self.update(
+                        Message::DownloadTarget(DetailsTarget {
+                            kind: "playlist".to_string(),
+                            id: playlist.id.clone(),
+                            title: playlist.name.clone(),
+                            subtitle: String::new(),
+                            art: crate::views::art_url(&playlist.image, "500x500"),
+                        }),
+                        context,
+                    );
+                }
             }
             Message::ToggleLikeArtist(artist) => {
-                self.library.toggle_like_artist(artist);
+                if self.library.toggle_like_artist(artist.clone())
+                    && self.settings.auto_download_liked
+                {
+                    self.update(
+                        Message::DownloadTarget(DetailsTarget {
+                            kind: "artist".to_string(),
+                            id: artist.id.clone(),
+                            title: artist.name.clone(),
+                            subtitle: String::new(),
+                            art: crate::views::art_url(&artist.image, "500x500"),
+                        }),
+                        context,
+                    );
+                }
             }
             Message::PlayByKind(kind, id) => {
                 spawn_play_by_kind(context, kind, id);
@@ -1104,6 +1273,7 @@ impl Component for Shell {
                     details.loading = false;
                     match result {
                         Ok(content) => {
+                            spawn_cache_images(context, details_image_urls(&content));
                             details.content = Some(content);
                         }
                         Err(err) => details.error = Some(err),
@@ -1163,7 +1333,12 @@ impl Component for Shell {
                     subtitle: target.subtitle.clone(),
                     art: target.art.clone(),
                 };
-                self.library.toggle_pin(item);
+                // Pinning downloads the item too (when the setting
+                // is on), so a pinned song / album / playlist /
+                // artist is available offline.
+                if self.library.toggle_pin(item) && self.settings.auto_download_pinned {
+                    self.update(Message::DownloadTarget(target), context);
+                }
             }
             Message::PlayPinnedSong(id) => {
                 spawn_play_pinned_song(context, id);
@@ -1186,7 +1361,7 @@ impl Component for Shell {
                 }
             }
             Message::DownloadTargetReady(target, songs) => {
-                let quality = Quality::from_setting(self.settings.quality);
+                let quality = Quality::from_setting(self.settings.download_quality);
                 let is_collection = target.kind != "song";
                 // A collection download groups its songs under the
                 // collection id; a lone song belongs to no
@@ -1219,6 +1394,7 @@ impl Component for Shell {
                     );
                 }
                 let mut items = Vec::new();
+                let mut song_ids = Vec::new();
                 for song in &songs {
                     let Some(url) = crate::player::pick_url(song, quality) else {
                         continue;
@@ -1237,13 +1413,25 @@ impl Component for Shell {
                         file_name: download::song_file_name(&artist, &song.name),
                         subfolder: subfolder.clone(),
                         art: crate::views::art_url(&song.image, "500x500"),
+                        album: song.album.name.clone(),
+                        duration: song.duration,
+                        local_image: None,
                     };
                     // Resume a partial file: the download task
                     // picks up the `.part` size itself.
                     self.downloads
                         .items
                         .insert(item.song_id.clone(), item.clone());
+                    song_ids.push(item.song_id.clone());
                     items.push(item);
+                }
+                // The collection -> songs mapping, so a downloaded
+                // album / playlist / artist's song list is
+                // available offline.
+                if let Some(collection_id) = &collection_id {
+                    self.downloads
+                        .collection_songs
+                        .insert(collection_id.clone(), song_ids);
                 }
                 self.downloads.save(&crate::store::app_dir());
                 for item in items {
@@ -1273,12 +1461,28 @@ impl Component for Shell {
                             item.status = DownloadStatus::Downloading;
                         }
                     }
-                    DownloadEvent::Completed { song_id } => {
+                    DownloadEvent::Completed {
+                        song_id,
+                        local_image,
+                    } => {
+                        // Compute the local file path first (an
+                        // immutable borrow), then update the item.
+                        let local_path = self
+                            .downloads
+                            .items
+                            .get(&song_id)
+                            .map(|item| self.downloads.file_path(item));
                         let mut collection_id = None;
                         if let Some(item) = self.downloads.items.get_mut(&song_id) {
                             item.status = DownloadStatus::Completed;
                             item.error = None;
+                            item.local_image = local_image;
                             collection_id = item.collection_id.clone();
+                        }
+                        // The player now plays this song from disk
+                        // (offline) instead of streaming it.
+                        if let Some(path) = local_path {
+                            self.player.set_local_path(song_id.clone(), path);
                         }
                         if let Some(collection_id) = collection_id
                             && let Some(collection) =
@@ -1444,7 +1648,7 @@ impl Component for Shell {
             menu_items.push(nav_divider());
             for pinned in &self.library.pinned {
                 let hovered = self.hovered_card.as_deref() == Some(pinned.id.as_str());
-                menu_items.push(pinned_nav_item(pinned, hovered, context));
+                menu_items.push(pinned_nav_item(pinned, hovered, self, context));
             }
         }
 
@@ -1764,6 +1968,18 @@ impl Shell {
         }
         let seq = self.details_seq;
         self.details_seq += 1;
+        // A fully downloaded collection or song opens from the
+        // stored data (offline) instead of the network.
+        if let Some(content) = self.offline_details(&target) {
+            self.details.push(DetailsState {
+                seq,
+                target: target.clone(),
+                loading: false,
+                error: None,
+                content: Some(content),
+            });
+            return;
+        }
         self.details.push(DetailsState {
             seq,
             target: target.clone(),
@@ -1772,6 +1988,148 @@ impl Shell {
             content: None,
         });
         spawn_details_load(context, seq, target);
+    }
+
+    /// Build a details page from the downloaded data (SQLite), for
+    /// a collection or song that is fully downloaded. This is what
+    /// makes a downloaded album / playlist / artist / song open
+    /// offline — the songs are rebuilt from the stored download
+    /// rows (with their locally cached art), and the collection
+    /// itself is rebuilt from the target (title / subtitle / art).
+    /// Returns `None` when the target is not fully downloaded, so
+    /// the caller falls back to the network.
+    fn offline_details(&self, target: &DetailsTarget) -> Option<DetailsContent> {
+        match target.kind.as_str() {
+            "song" => {
+                let item = self.downloads.items.get(&target.id)?;
+                if item.status != DownloadStatus::Completed {
+                    return None;
+                }
+                let song = item.to_song();
+                Some(DetailsContent {
+                    song: Some(song.clone()),
+                    songs: vec![song],
+                    lyrics: None,
+                    subtitle: target.subtitle.clone(),
+                    art: target.art.clone(),
+                    album: None,
+                    artist: None,
+                    playlist: None,
+                })
+            }
+            "album" | "playlist" | "chart" | "artist" => {
+                let collection = self.downloads.collection(&target.id)?;
+                if collection.status != DownloadStatus::Completed {
+                    return None;
+                }
+                let song_ids = self.downloads.collection_song_ids(&target.id);
+                if song_ids.is_empty() {
+                    return None;
+                }
+                let songs: Vec<Song> = song_ids
+                    .iter()
+                    .filter_map(|id| self.downloads.items.get(id))
+                    .filter(|item| item.status == DownloadStatus::Completed)
+                    .map(|item| item.to_song())
+                    .collect();
+                if songs.is_empty() {
+                    return None;
+                }
+                let art = target
+                    .art
+                    .clone()
+                    .map(|url| {
+                        vec![saavnapi::DownloadLink {
+                            quality: "500x500".to_string(),
+                            url,
+                        }]
+                    })
+                    .unwrap_or_default();
+                match target.kind.as_str() {
+                    "album" => Some(DetailsContent {
+                        song: None,
+                        songs,
+                        lyrics: None,
+                        subtitle: target.subtitle.clone(),
+                        art: target.art.clone(),
+                        album: Some(Album {
+                            id: target.id.clone(),
+                            name: target.title.clone(),
+                            description: None,
+                            year: None,
+                            kind: "album".to_string(),
+                            play_count: None,
+                            language: String::new(),
+                            explicit_content: false,
+                            artists: saavnapi::ArtistGroups::default(),
+                            song_count: Some(collection.total_items as u64),
+                            url: String::new(),
+                            image: art,
+                            songs: None,
+                        }),
+                        artist: None,
+                        playlist: None,
+                    }),
+                    "artist" => Some(DetailsContent {
+                        song: None,
+                        songs: songs.clone(),
+                        lyrics: None,
+                        subtitle: target.subtitle.clone(),
+                        art: target.art.clone(),
+                        album: None,
+                        artist: Some(Artist {
+                            id: target.id.clone(),
+                            name: target.title.clone(),
+                            url: String::new(),
+                            kind: "artist".to_string(),
+                            image: art,
+                            follower_count: None,
+                            fan_count: None,
+                            is_verified: None,
+                            dominant_language: None,
+                            dominant_type: None,
+                            bio: None,
+                            dob: None,
+                            fb: None,
+                            twitter: None,
+                            wiki: None,
+                            available_languages: Vec::new(),
+                            is_radio_present: None,
+                            top_songs: Some(songs),
+                            top_albums: None,
+                            singles: None,
+                            similar_artists: None,
+                        }),
+                        playlist: None,
+                    }),
+                    _ => Some(DetailsContent {
+                        song: None,
+                        songs,
+                        lyrics: None,
+                        subtitle: target.subtitle.clone(),
+                        art: target.art.clone(),
+                        album: None,
+                        artist: None,
+                        playlist: Some(Playlist {
+                            id: target.id.clone(),
+                            name: target.title.clone(),
+                            description: None,
+                            year: None,
+                            kind: "playlist".to_string(),
+                            play_count: None,
+                            language: String::new(),
+                            explicit_content: false,
+                            song_count: Some(collection.total_items as u64),
+                            url: String::new(),
+                            image: art,
+                            songs: None,
+                            artists: None,
+                        }),
+                    }),
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Open the context menu at window coordinates, clamped so the
@@ -1919,8 +2277,23 @@ impl Shell {
     /// before the transition runs (the same pattern as the
     /// per-page fades).
     fn after_track_change(&mut self, context: &ComponentContext<Self>) {
-        if let Some(song) = self.player.current() {
+        if let Some(song) = self.player.current().cloned() {
             self.library.push_recent(song.clone());
+            // A played song joins the recent list, and (when the
+            // setting is on) it is downloaded too, so the recent
+            // 100 songs are available offline.
+            if self.settings.auto_download_recent {
+                self.update(
+                    Message::DownloadTarget(DetailsTarget {
+                        kind: "song".to_string(),
+                        id: song.id.clone(),
+                        title: song.name.clone(),
+                        subtitle: crate::views::artist_names(&song),
+                        art: crate::views::art_url(&song.image, "500x500"),
+                    }),
+                    context,
+                );
+            }
             // A new song means a new main artist: drop the old brief
             // and fetch this song's artist (followers + full image
             // for the sidebar's artist brief). Same song (repeat)
@@ -1971,11 +2344,24 @@ impl Shell {
         // --- Left: 56px art, title (one line), artists (up to two
         // lines of clickable names), add-to-liked button. ---
         let (art, title, artist_view): (Option<String>, String, View) = match &current {
-            Some(song) => (
-                views::art_url(&song.image, "150x150"),
-                song.name.clone(),
-                views::artist_links(&song.artists, 2, 44, context),
-            ),
+            Some(song) => {
+                let links = views::artist_links(&song.artists, 2, 44, context);
+                // A downloaded song gets a filled circle check at
+                // the start of the artist line.
+                let artist_view: View = if self.downloads.is_downloaded(&song.id) {
+                    StackPanel::new()
+                        .orientation(Orientation::Horizontal)
+                        .spacing(4.0)
+                        .children((views::downloaded_badge(14.0), links))
+                } else {
+                    links
+                };
+                (
+                    views::art_url(&song.image, "150x150"),
+                    song.name.clone(),
+                    artist_view,
+                )
+            }
             None => (
                 None,
                 "Nothing playing".to_string(),
@@ -2361,10 +2747,20 @@ impl Shell {
                         .text_wrapping(TextWrapping::Wrap)
                         .max_lines(2),
                 ));
-                rows.push(KeyedView::new(
-                    "artists",
-                    views::artist_links(&song.artists, 2, 44, context),
-                ));
+                // A downloaded song gets a filled circle check at
+                // the start of the artist line.
+                let artists_view: View = if self.downloads.is_downloaded(&song.id) {
+                    StackPanel::new()
+                        .orientation(Orientation::Horizontal)
+                        .spacing(4.0)
+                        .children((
+                            views::downloaded_badge(14.0),
+                            views::artist_links(&song.artists, 2, 44, context),
+                        ))
+                } else {
+                    views::artist_links(&song.artists, 2, 44, context)
+                };
+                rows.push(KeyedView::new("artists", artists_view));
                 match (&song.album.id, &song.album.name) {
                     (Some(id), Some(name)) => {
                         let target = DetailsTarget {
