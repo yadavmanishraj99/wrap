@@ -357,11 +357,12 @@ fn hover_button(
         .content(SymbolIcon::new().symbol(icon))
 }
 
-/// One song row: artwork, title/artist, duration, play + like buttons.
+/// One song row: artwork, title/artist, duration, like button.
 /// `queue` is the full list the row belongs to, so Play starts the
 /// queue at this song's position. On hover, a circular play icon
 /// appears over the art (the same hover affordance as the media
-/// cards); clicking it plays the song.
+/// cards); clicking it plays the song. There is no permanent Play
+/// button at the right end — the hover icon is the play affordance.
 pub fn song_row(
     song: &Song,
     queue: &[Song],
@@ -440,7 +441,6 @@ pub fn song_row(
                     GridLength::Star(1.0),
                     GridLength::Auto,
                     GridLength::Auto,
-                    GridLength::Auto,
                 ])
                 .margin(4.0)
                 .children((
@@ -477,11 +477,6 @@ pub fn song_row(
                         } else {
                             Symbol::Add
                         })),
-                    Button::new()
-                        .margin(4.0)
-                        .grid_column(4)
-                        .on_click(context.message(Message::PlaySong(queue.to_vec(), index)))
-                        .content(SymbolIcon::new().symbol(Symbol::Play)),
                 )),
         )
 }
