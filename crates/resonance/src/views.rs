@@ -450,15 +450,15 @@ pub const SKELETON_DIM: f64 = 0.75;
 /// The skeleton fill: a solid gray with real contrast against the
 /// page background in both themes. Checked with the WCAG contrast
 /// formula (page: dark #202020, light #F3F3F3; fill blended at the
-/// pulse opacity): dark #525252 is 1.73:1 dim / 2.09:1 bright,
-/// light #B2B2B2 is 1.61:1 dim / 1.91:1 bright. The old
+/// pulse opacity): dark #4A4A4A is 1.57:1 dim / 1.84:1 bright,
+/// light #BCBCBC is 1.48:1 dim / 1.71:1 bright. The old
 /// CardBackground fill was ~1.1:1 in both themes — nearly
 /// invisible. `Theme::System` follows the app's dark-first
 /// default.
 pub fn skeleton_fill(theme: Theme) -> Brush {
     match theme {
-        Theme::Light => Brush::Solid(Color::rgb(0xB2, 0xB2, 0xB2)),
-        _ => Brush::Solid(Color::rgb(0x52, 0x52, 0x52)),
+        Theme::Light => Brush::Solid(Color::rgb(0xBC, 0xBC, 0xBC)),
+        _ => Brush::Solid(Color::rgb(0x4A, 0x4A, 0x4A)),
     }
 }
 

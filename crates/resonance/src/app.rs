@@ -149,6 +149,10 @@ pub struct Shell {
     pub details_fade: f64,
     pub pane_open: bool,
     pub search_text: String,
+    /// A counter bumped on every keystroke and every suggestion
+    /// pick; a debounced search only fires when its seq still
+    /// matches, so a burst of typing sends one `search_all`.
+    pub search_debounce_seq: u64,
     pub search_suggestions: Vec<String>,
     pub home: Option<LaunchData>,
     pub home_loading: bool,
@@ -180,6 +184,11 @@ pub enum Message {
     PaneOpenChanged(bool),
     ToggleTheme,
     SearchTextChanged(String),
+    /// Fired ~300ms after a keystroke, once typing has paused. The
+    /// seq is the `search_debounce_seq` at the time the timer was
+    /// started; the handler drops it when a newer keystroke or a
+    /// suggestion pick superseded it.
+    SearchDebounced(u64, String),
     SuggestionChosen(String),
     HomeLoaded(Result<LaunchData, String>),
     SearchAllLoaded(String, Result<SearchAll, String>),
@@ -438,6 +447,17 @@ fn spawn_fade_in(context: &ComponentContext<Shell>, message: Message) {
     });
 }
 
+/// Wait ~300ms after the last keystroke, then fire the search — a
+/// burst of typing sends one `search_all`, not one per keystroke.
+/// The seq lets the handler drop a timer a newer keystroke
+/// superseded.
+fn spawn_search_debounce(context: &ComponentContext<Shell>, seq: u64, query: String) {
+    context.spawn_background(move |_| {
+        std::thread::sleep(Duration::from_millis(300));
+        Message::SearchDebounced(seq, query)
+    });
+}
+
 fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
     KeyedView::new(
         tag.to_string(),
@@ -461,6 +481,7 @@ impl Component for Shell {
         let library = Library::load();
         let mut player = Player::new();
         player.set_volume(settings.volume);
+        player.set_repeat_all(settings.repeat == RepeatMode::All);
         // The media session's button channel: the Shell listens for
         // OS play/pause/next/previous presses on it.
         let smtc_rx = player
@@ -492,6 +513,7 @@ impl Component for Shell {
             details_fade: 1.0,
             pane_open: true,
             search_text: String::new(),
+            search_debounce_seq: 0,
             search_suggestions: Vec::new(),
             home: None,
             home_loading: true,
@@ -534,11 +556,11 @@ impl Component for Shell {
             Message::SearchTextChanged(text) => {
                 self.search_text = text.clone();
                 // Typing searches whatever is typed, live: one
-                // `search_all` call per keystroke feeds BOTH the
-                // autocomplete suggestions and the full results, so
-                // results never wait for a suggestion to be picked.
-                // The query rides along so a slow reply can't
-                // overwrite results for newer text.
+                // `search_all` call feeds BOTH the autocomplete
+                // suggestions and the full results, so results never
+                // wait for a suggestion to be picked. The query rides
+                // along so a slow reply can't overwrite results for
+                // newer text.
                 let query = text.trim().to_string();
                 if query.len() >= 2 {
                     // Typing shows search results, not a stale
@@ -550,16 +572,32 @@ impl Component for Shell {
                     self.search_loading = true;
                     self.search_error = None;
                     self.ensure_skeleton_pulse(context);
-                    context.spawn_background(move |_| {
-                        let result = data::runtime_handle()
-                            .block_on(async { data::client().search_all(&query).await });
-                        Message::SearchAllLoaded(query, result.map_err(|err| err.to_string()))
-                    });
+                    // Debounced: the search only fires once typing
+                    // has paused for ~300ms, so a burst sends one
+                    // call instead of one per keystroke. The seq
+                    // lets the timer's handler drop it when a newer
+                    // keystroke started a fresh timer.
+                    self.search_debounce_seq += 1;
+                    let seq = self.search_debounce_seq;
+                    spawn_search_debounce(context, seq, query);
                 } else {
                     self.search_suggestions.clear();
                     self.search_all = None;
                     self.search_error = None;
                     self.search_loading = false;
+                }
+            }
+            Message::SearchDebounced(seq, query) => {
+                // A newer keystroke (or a picked suggestion) started
+                // its own timer — this one is stale. A query that no
+                // longer matches the box is stale too (the text was
+                // edited or cleared while the timer waited).
+                if seq == self.search_debounce_seq && query == self.search_text.trim() {
+                    context.spawn_background(move |_| {
+                        let result = data::runtime_handle()
+                            .block_on(async { data::client().search_all(&query).await });
+                        Message::SearchAllLoaded(query, result.map_err(|err| err.to_string()))
+                    });
                 }
             }
             Message::SuggestionChosen(text) => {
@@ -691,6 +729,10 @@ impl Component for Shell {
             Message::CycleRepeat => {
                 self.settings.repeat = self.settings.repeat.next();
                 self.settings.save();
+                // The session's Next button follows repeat-all (it
+                // wraps on the last song when repeat-all is on).
+                self.player
+                    .set_repeat_all(self.settings.repeat == RepeatMode::All);
             }
             Message::OpenQueue => {
                 if self.page != Page::Queue {
@@ -1337,6 +1379,10 @@ impl Shell {
         if query.is_empty() {
             return;
         }
+        // A picked suggestion searches at once — invalidate any
+        // keystroke debounce still waiting, so it can't fire after
+        // this one.
+        self.search_debounce_seq += 1;
         self.page = Page::Search;
         // Choosing a suggestion shows results, not a stale
         // details drill-in.

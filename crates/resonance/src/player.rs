@@ -15,6 +15,7 @@ use windows::Media::Playback::{MediaPlaybackState, MediaPlayer};
 use windows::Media::{
     MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
     SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
+    SystemMediaTransportControlsTimelineProperties,
 };
 use windows::Storage::Streams::RandomAccessStreamReference;
 use windows::core::HSTRING;
@@ -97,6 +98,10 @@ pub struct Player {
     /// The receiving end of the SMTC button channel; the Shell
     /// takes it once and listens for button presses on it.
     smtc_rx: Option<Receiver<SmtcCommand>>,
+    /// Whether repeat-all is on (set by the Shell, which owns the
+    /// setting). Decides whether Next stays enabled on the last
+    /// song — with repeat-all it wraps to the start.
+    repeat_all: bool,
     pub queue: Vec<Song>,
     pub index: Option<usize>,
 }
@@ -109,11 +114,20 @@ impl Player {
             inner,
             smtc: None,
             smtc_rx: Some(rx),
+            repeat_all: false,
             queue: Vec::new(),
             index: None,
         };
         player.setup_smtc(tx);
         player
+    }
+
+    /// Tell the player whether repeat-all is on, so the session's
+    /// Next button stays enabled on the last song when it wraps.
+    /// Called by the Shell whenever the repeat mode changes.
+    pub fn set_repeat_all(&mut self, repeat_all: bool) {
+        self.repeat_all = repeat_all;
+        self.update_smtc_status();
     }
 
     /// Hand the SMTC button channel's receiving end to the Shell
@@ -182,7 +196,6 @@ impl Player {
             return;
         };
         let _ = updater.SetType(MediaPlaybackType::Music);
-        let _ = updater.SetAppMediaId(&HSTRING::from(APP_USER_MODEL_ID));
         if let Ok(music) = updater.MusicProperties() {
             let _ = music.SetTitle(&HSTRING::from(song.name.clone()));
             let _ = music.SetArtist(&HSTRING::from(artist_names(song)));
@@ -208,7 +221,9 @@ impl Player {
     }
 
     /// Push the playback state (Playing / Paused / Stopped) into the
-    /// media session, from the actual player state.
+    /// media session, from the actual player state — and enable or
+    /// disable Next/Previous by queue position, so the session never
+    /// offers a button that does nothing.
     fn update_smtc_status(&self) {
         let Some(smtc) = &self.smtc else {
             return;
@@ -221,14 +236,48 @@ impl Player {
             MediaPlaybackStatus::Stopped
         };
         let _ = smtc.SetPlaybackStatus(status);
+        // Next wraps to the start with repeat-all, so it stays
+        // enabled on the last song then; otherwise it is off there.
+        // Previous is off on the first song (it has nowhere to go).
+        let has_next = self.has_current() && (!self.is_last() || self.repeat_all);
+        let has_prev = self.index.map(|i| i > 0).unwrap_or(false);
+        let _ = smtc.SetIsNextEnabled(has_next);
+        let _ = smtc.SetIsPreviousEnabled(has_prev);
+    }
+
+    /// Push position/duration into the media session, so the OS
+    /// flyout's seek bar shows where the track is and how long it
+    /// is. Called on track start and on every status sync (the Tick
+    /// drives that while a song is loaded, so the bar moves).
+    fn update_smtc_timeline(&self) {
+        let Some(smtc) = &self.smtc else {
+            return;
+        };
+        let Ok(props) = SystemMediaTransportControlsTimelineProperties::new() else {
+            return;
+        };
+        let position = TimeSpan {
+            Duration: (self.position_secs() * 10_000_000.0) as i64,
+        };
+        let duration = TimeSpan {
+            Duration: (self.duration_secs() * 10_000_000.0) as i64,
+        };
+        let _ = props.SetStartTime(TimeSpan { Duration: 0 });
+        let _ = props.SetEndTime(duration);
+        let _ = props.SetMinSeekTime(TimeSpan { Duration: 0 });
+        let _ = props.SetMaxSeekTime(duration);
+        let _ = props.SetPosition(position);
+        let _ = smtc.UpdateTimelineProperties(&props);
     }
 
     /// Re-read the player state and push it to the media session.
     /// Called when the player stops on its own (a track ending with
     /// repeat off and autoplay off), where no play/pause handler
-    /// runs to update the session.
+    /// runs to update the session — and by the Tick, so the
+    /// flyout's seek bar keeps moving.
     pub fn sync_smtc_status(&self) {
         self.update_smtc_status();
+        self.update_smtc_timeline();
     }
 
     pub fn current(&self) -> Option<&Song> {
@@ -261,10 +310,11 @@ impl Player {
         let source = MediaSource::CreateFromUri(&uri)?;
         player.SetSource(&source)?;
         player.Play()?;
-        // A new track: the session shows this song's metadata and
-        // the Playing state.
+        // A new track: the session shows this song's metadata, the
+        // Playing state, and the track length for the seek bar.
         self.update_smtc_metadata();
         self.update_smtc_status();
+        self.update_smtc_timeline();
         Ok(())
     }
 

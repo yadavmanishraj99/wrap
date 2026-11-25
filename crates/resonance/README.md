@@ -48,10 +48,16 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   the stream path). The session shows the track's title, artist,
   album and artwork, Play/Pause/Next/Previous all work (media keys
   and the OS controls route into the same handlers the player bar
-  uses), and the status follows playback. The app identity is
-  `YadavManishraj.Resonance` (set as the process AppUserModelID and
-  the session's AppMediaId); the name fully resolves once the app
-  is installed/packaged with a matching registered shortcut.
+  uses), and the status follows playback. Next/Previous are enabled
+  or disabled by queue position (no Previous on the first song, no
+  Next on the last one — unless repeat-all is on, when Next wraps),
+  and the flyout's seek bar shows position/duration (timeline
+  properties, updated on the Tick). The app identity is
+  `YadavManishraj.Resonance` (set as the process AppUserModelID at
+  startup); the name fully resolves once the app is installed/
+  packaged with a matching registered Start-menu shortcut — until
+  then it may still show "Unknown app" even with the track info
+  correct.
 - **Skeleton loading** — Home, Search and Details show skeleton
   placeholders while they load, then the loaded content fades in.
   The skeleton is built from each page's own layout, not a generic
@@ -65,12 +71,15 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   for an artist; Songs for an album/playlist/chart; Lyrics for a
   song). The fill is a solid gray with real contrast against the
   page background in both themes (checked with the WCAG formula:
-  dark `#525252`, light `#B2B2B2`; the shimmer pulse runs 0.75–1.0
+  dark `#4A4A4A` (1.57:1 dim / 1.84:1 bright), light `#BCBCBC`
+  (1.48:1 dim / 1.71:1 bright); the shimmer pulse runs 0.75–1.0
   so even the dim phase stays visible).
 - **Search** — typing in the header search field searches whatever
-  is typed, live: one `search_all` call per keystroke feeds both the
-  autocomplete suggestions and the full results, and typing takes
-  you to the Search page. Picking a suggestion searches it too.
+  is typed: the search is debounced ~300ms, so a burst of typing
+  sends one `search_all` call (not one per keystroke) once typing
+  pauses, and that one call feeds both the autocomplete
+  suggestions and the full results; typing takes you to the Search
+  page. Picking a suggestion searches it at once (no debounce).
   Results render as Home-style media-card sections (Top result,
   Songs, Albums, Artists, Playlists).
 - **Sidebar** — Home, Search, Library at the top; Settings pinned
@@ -117,7 +126,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Details | Live — one page per kind, each with its own layout: Artist (circular art, followers, Play, Top songs, Top albums, Similar artists), Album (art, clickable artist names, year • songs, Play, Like), Playlist / Chart (art, description, Play, Like), Song (art, clickable artists, Play, Like, lyrics when available); title-bar back button returns. Song cards never open this page — they just play. Details are an inner-route stack: opening a details page from inside another details page pushes a new entry, and Back walks back through each one in reverse order (Home → album → album → artist → back → back → back → Home), instead of dropping straight to the page |
 | Queue | Live — current playback queue from the player bar; playing a row starts the queue there; song titles wrap |
 | Now Playing | Live — an opaque 340px sidebar on the right that opens whenever a track starts playing (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which rises in and drops out with a fade + slight scale; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; the next track start opens it again |
-| Search | Live — typing searches the typed text live (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
+| Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists (persisted locally), all as Home-style media-card sections; albums and playlists land here via the Like button on their pages |
 | Settings | Live — theme, window material (Mica default), stream quality, volume, autoplay, about |
 
