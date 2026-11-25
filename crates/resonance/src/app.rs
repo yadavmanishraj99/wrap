@@ -25,7 +25,7 @@ use windows_reactor::*;
 use crate::data;
 use crate::pages;
 use crate::player::{Player, Quality};
-use crate::store::{Library, Settings, Theme};
+use crate::store::{Library, QualitySetting, Settings, Theme};
 use crate::views;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +97,9 @@ pub enum Message {
     ToggleLike(Song),
     PlayLaunchItem(LaunchItem),
     PlayByKind(String, String),
+    SetTheme(Theme),
+    SetQuality(QualitySetting),
+    SetAutoplay(bool),
     RetryHome,
     Noop,
 }
@@ -299,12 +302,28 @@ impl Component for Shell {
                 self.settings.save();
                 self.player.set_volume(volume);
             }
+            Message::SetTheme(theme) => {
+                self.settings.theme = theme;
+                self.settings.save();
+            }
+            Message::SetQuality(quality) => {
+                self.settings.quality = quality;
+                self.settings.save();
+            }
+            Message::SetAutoplay(autoplay) => {
+                self.settings.autoplay = autoplay;
+                self.settings.save();
+            }
             Message::Tick => {
                 self.position = self.player.position_secs();
                 self.duration = self.player.duration_secs();
                 self.playing = self.player.is_playing();
                 // MediaPlayer doesn't auto-advance our queue.
-                if self.playing && self.duration > 5.0 && self.position >= self.duration - 0.3 {
+                if self.playing
+                    && self.settings.autoplay
+                    && self.duration > 5.0
+                    && self.position >= self.duration - 0.3
+                {
                     let quality = Quality::from_setting(self.settings.quality);
                     self.player.next(quality);
                     self.after_track_change(context);

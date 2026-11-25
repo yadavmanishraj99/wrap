@@ -44,14 +44,14 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 - **Theme** — Dark / Light / System toggle in the title bar
   (dark-first, matching the Resonance design system).
 
-## Pages (in progress)
+## Pages
 
 | Page | Status |
 | --- | --- |
-| Home | Placeholder — launch data (trending, new albums, charts) next |
-| Search | Placeholder — typed search, suggestions, all result types next |
-| Library | Placeholder — liked songs/albums/playlists, recents next |
-| Settings | Placeholder — theme, quality, volume, autoplay next |
+| Home | Live — launch data: Trending now, Top playlists, New albums, Charts; rows play their songs |
+| Search | Live — AutoSuggestBox suggestions + Top result, Songs, Albums, Artists, Playlists |
+| Library | Live — liked songs, recently played, liked albums/playlists (persisted locally) |
+| Settings | Live — theme, stream quality, volume, autoplay, about |
 
 ## Layout
 
