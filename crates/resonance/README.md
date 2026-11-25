@@ -176,13 +176,15 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   pinned from its card's context menu (Pin / Unpin). Pinned items
   appear in the sidebar below a divider after Library, in pin order,
   each as a row with its art (48px, the same size as the song-row art
-  in the details views) + title only (no subtitle), the
-  title at 14px, the same size as the nav items. The 48px art makes
-  the pinned rows taller than a plain nav item. On hover, a circular
-  play icon appears over the pinned art; clicking it plays the item —
-  a song plays itself, an artist plays their top songs, an
-  album/playlist/chart plays its songs. (The icon is a sibling of
-  the row, not a child, so its press never also triggers the row's
+  in the details views) + title (14px, the same size as the nav
+  items) + subtitle (12px, dimmed, below the title with a small gap
+  between them). The 48px art makes the pinned rows taller than a
+  plain nav item, and there is a little vertical breathing room
+  between rows. On hover, a circular play icon appears over the
+  pinned art; clicking it plays the item — a song plays itself, an
+  artist plays their top songs, an album/playlist/chart plays its
+  songs. (The icon is a sibling of the row, not a child, so its
+  press never also triggers the row's click handler.)
   click.) Every square art in
   the app has 4px rounded corners (pinned art, song-row art, details
   header art, media-card art, Now Playing art, player-bar art);

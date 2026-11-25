@@ -576,10 +576,27 @@ fn pinned_nav_item(
     let title = TextBlock::new()
         .text(item.title.clone())
         .font_size(14.0)
-        .vertical_alignment(VerticalAlignment::Center)
         .text_wrapping(TextWrapping::NoWrap)
         .text_trimming(TextTrimming::CharacterEllipsis)
         .max_lines(1);
+    let subtitle = TextBlock::new()
+        .text(item.subtitle.clone())
+        .font_size(12.0)
+        .opacity(0.7)
+        .text_wrapping(TextWrapping::NoWrap)
+        .text_trimming(TextTrimming::CharacterEllipsis)
+        .max_lines(1);
+    // Title above subtitle, with a small gap between them; the
+    // subtitle is only shown when the item has one.
+    let mut text_children: Vec<KeyedView> = vec![KeyedView::new("title", title)];
+    if !item.subtitle.is_empty() {
+        text_children.push(KeyedView::new("subtitle", subtitle));
+    }
+    let text_column = StackPanel::new()
+        .orientation(Orientation::Vertical)
+        .spacing(2.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .keyed_children(text_children);
     let row = Border::new()
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .background(Brush::Solid(Color::transparent()))
@@ -595,7 +612,7 @@ fn pinned_nav_item(
                 .orientation(Orientation::Horizontal)
                 .spacing(8.0)
                 .vertical_alignment(VerticalAlignment::Center)
-                .children((art_border, title)),
+                .children((art_border, text_column)),
         );
     let mut content_children: Vec<KeyedView> = vec![KeyedView::new("row", row)];
     if hovered {
@@ -621,6 +638,8 @@ fn pinned_nav_item(
     let content =
         Border::new()
             .background(Brush::Solid(Color::transparent()))
+            // A little vertical breathing room between pinned rows.
+            .margin(Thickness::new(0.0, 3.0, 0.0, 3.0))
             .on_pointer_entered(context.callback(move |_info: PointerEventInfo| {
                 Message::CardHover(Some(hover_id.clone()))
             }))
