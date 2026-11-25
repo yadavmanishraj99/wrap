@@ -175,11 +175,14 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         "song" => song::view(shell, context, &details.target, content),
         _ => playlist::view(shell, context, &details.target, content, "Playlist"),
     };
-    // Loaded content fades in (opacity transition on the Border,
-    // driven by shell.details_fade).
+    // Loaded content fades in and settles from a slightly deeper
+    // zoom than a plain page switch (0.97, not 0.98) — the drill-in
+    // motion, driven by shell.details_fade / details_scale.
     Border::new()
         .opacity(shell.details_fade)
         .opacity_transition(std::time::Duration::from_millis(300))
+        .scale(shell.details_scale)
+        .scale_transition(std::time::Duration::from_millis(300))
         .content(ScrollViewer::new().content(page))
 }
 

@@ -147,6 +147,17 @@ pub struct Shell {
     pub home_fade: f64,
     pub search_fade: f64,
     pub details_fade: f64,
+    /// The page transition (navigation motion): the whole page fades
+    /// in and settles from a slight zoom on every navigation event
+    /// (page switch, drill-in, back). Fluent's page transition is a
+    /// slide + fade; Reactor 0.100 has no translate, so a subtle
+    /// scale is the closest equivalent.
+    pub page_fade: f64,
+    pub page_scale: f64,
+    /// The drill-in scale for details content: a details page zooms
+    /// in a touch deeper than a plain page switch (0.97, not 0.98),
+    /// so opening a card feels like going deeper.
+    pub details_scale: f64,
     pub pane_open: bool,
     pub search_text: String,
     /// A counter bumped on every keystroke and every suggestion
@@ -203,6 +214,9 @@ pub enum Message {
     HomeFadeIn,
     SearchFadeIn,
     DetailsFadeIn,
+    /// The page transition finished its 30ms settle: the page is
+    /// fully visible at full size.
+    PageFadeIn,
     ToggleLike(Song),
     ToggleLikeAlbum(Album),
     ToggleLikePlaylist(Playlist),
@@ -511,6 +525,9 @@ impl Component for Shell {
             home_fade: 1.0,
             search_fade: 1.0,
             details_fade: 1.0,
+            page_fade: 1.0,
+            page_scale: 1.0,
+            details_scale: 1.0,
             pane_open: true,
             search_text: String::new(),
             search_debounce_seq: 0,
@@ -539,9 +556,13 @@ impl Component for Shell {
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
         match message {
             Message::Navigate(page) => {
+                let changed = self.page != page;
                 self.page = page;
                 // Switching top-level pages leaves a details drill-in.
                 self.details.clear();
+                if changed {
+                    self.start_page_transition(context);
+                }
             }
             Message::TogglePane => self.pane_open = !self.pane_open,
             Message::PaneOpenChanged(open) => self.pane_open = open,
@@ -568,6 +589,7 @@ impl Component for Shell {
                     self.details.clear();
                     if self.page != Page::Search {
                         self.page = Page::Search;
+                        self.start_page_transition(context);
                     }
                     self.search_loading = true;
                     self.search_error = None;
@@ -735,7 +757,8 @@ impl Component for Shell {
                     .set_repeat_all(self.settings.repeat == RepeatMode::All);
             }
             Message::OpenQueue => {
-                if self.page != Page::Queue {
+                let changed = self.page != Page::Queue;
+                if changed {
                     self.back_page = self.page;
                 }
                 // The queue replaces whatever is showing, details
@@ -746,6 +769,9 @@ impl Component for Shell {
                 self.now_playing_open = false;
                 self.queue_overlay_mounted = false;
                 self.queue_overlay_shown = false;
+                if changed {
+                    self.start_page_transition(context);
+                }
             }
             Message::ToggleNowPlaying => {
                 self.now_playing_open = !self.now_playing_open;
@@ -864,6 +890,11 @@ impl Component for Shell {
             }
             Message::DetailsFadeIn => {
                 self.details_fade = 1.0;
+                self.details_scale = 1.0;
+            }
+            Message::PageFadeIn => {
+                self.page_fade = 1.0;
+                self.page_scale = 1.0;
             }
             Message::ToggleLike(song) => {
                 self.library.toggle_like(song);
@@ -891,6 +922,7 @@ impl Component for Shell {
                         Ok(content) => {
                             details.content = Some(content);
                             self.details_fade = 0.0;
+                            self.details_scale = 0.97;
                             spawn_fade_in(context, Message::DetailsFadeIn);
                         }
                         Err(err) => details.error = Some(err),
@@ -974,8 +1006,20 @@ impl Component for Shell {
                     // was opened from. The stack makes this walk
                     // back through each details page in reverse.
                     self.details.pop();
+                    if !self.details.is_empty() {
+                        // Another details page is now on top — it
+                        // fades + zooms in, the same drill-in motion
+                        // as opening one.
+                        self.details_fade = 0.0;
+                        self.details_scale = 0.97;
+                        spawn_fade_in(context, Message::DetailsFadeIn);
+                    } else {
+                        // Back to the page itself.
+                        self.start_page_transition(context);
+                    }
                 } else if self.page == Page::Queue {
                     self.page = self.back_page;
+                    self.start_page_transition(context);
                 }
             }
             Message::RetryHome => {
@@ -1048,6 +1092,21 @@ impl Component for Shell {
             Page::Settings => pages::settings::view(self, context),
             Page::Queue => pages::queue::view(self, context),
         };
+        // Navigation motion: the whole page fades in and settles
+        // from a slight zoom on every navigation event (driven by
+        // shell.page_fade / page_scale, reset by
+        // start_page_transition). Fluent's page transition is a
+        // slide + fade; Reactor 0.100 has no translate, so this
+        // fade + 0.98 zoom is the closest equivalent. The Border
+        // stretches to fill the NavigationView content area.
+        let page_view: View = Border::new()
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .opacity(self.page_fade)
+            .opacity_transition(std::time::Duration::from_millis(200))
+            .scale(self.page_scale)
+            .scale_transition(std::time::Duration::from_millis(200))
+            .content(page_view);
 
         // Settings sits in the pane footer, at the very bottom of
         // the sidebar — not with the other navigation items. (0.100
@@ -1360,6 +1419,10 @@ impl Shell {
             content: None,
         });
         self.ensure_skeleton_pulse(context);
+        // Drilling in moves too: the page (now showing the details
+        // skeleton) fades + zooms in, and the loaded content follows
+        // with its own deeper zoom when it arrives.
+        self.start_page_transition(context);
         spawn_details_load(context, seq, target);
     }
 
@@ -1439,6 +1502,18 @@ impl Shell {
                 None => Message::Noop,
             }
         });
+    }
+
+    /// Reset the page transition (fade + slight zoom) and animate it
+    /// back in. Called on every navigation event, so switching
+    /// pages, drilling in, and going back all move instead of
+    /// cutting. The 30ms settle lets the new page mount invisible
+    /// before the transition runs (the same pattern as the
+    /// per-page fades).
+    fn start_page_transition(&mut self, context: &ComponentContext<Self>) {
+        self.page_fade = 0.0;
+        self.page_scale = 0.98;
+        spawn_fade_in(context, Message::PageFadeIn);
     }
 
     fn after_track_change(&mut self, context: &ComponentContext<Self>) {

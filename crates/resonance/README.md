@@ -74,7 +74,18 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   dark `#4A4A4A` (1.57:1 dim / 1.84:1 bright), light `#BCBCBC`
   (1.48:1 dim / 1.71:1 bright); the shimmer pulse runs 0.75–1.0
   so even the dim phase stays visible).
-- **Search** — typing in the header search field searches whatever
+- **Navigation motion** — every navigation event moves instead
+  of cutting: page switches (nav, Settings footer, search typing,
+  queue) fade in and settle from a slight zoom (200ms, 0.98→1.0);
+  drilling into a details page zooms a touch deeper (300ms,
+  0.97→1.0) so it feels like going deeper, and going Back replays
+  the same motion on the page it reveals. Fluent's real page
+  transition is a slide + fade, but windows-reactor 0.100 has no
+  translate, so fade + zoom is the closest equivalent — no
+  Connected Animations or Composition animations are available
+  through Reactor either. The queue overlay already had its own
+  fade + scale; the Now Playing sidebar still appears instantly
+  (a panel, not a navigation event).
   is typed: the search is debounced ~300ms, so a burst of typing
   sends one `search_all` call (not one per keystroke) once typing
   pauses, and that one call feeds both the autocomplete
