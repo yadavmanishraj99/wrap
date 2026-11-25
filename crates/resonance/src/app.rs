@@ -26,7 +26,7 @@ use windows_reactor::*;
 use crate::data;
 use crate::pages;
 use crate::player::{Player, Quality};
-use crate::store::{Library, QualitySetting, RepeatMode, Settings, Theme};
+use crate::store::{Library, Material, QualitySetting, RepeatMode, Settings, Theme};
 use crate::views;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +146,7 @@ pub enum Message {
     ToggleMute,
     Back,
     SetTheme(Theme),
+    SetMaterial(Material),
     SetQuality(QualitySetting),
     SetAutoplay(bool),
     RetryHome,
@@ -488,6 +489,10 @@ impl Component for Shell {
                 self.settings.theme = theme;
                 self.settings.save();
             }
+            Message::SetMaterial(material) => {
+                self.settings.material = material;
+                self.settings.save();
+            }
             Message::SetQuality(quality) => {
                 self.settings.quality = quality;
                 self.settings.save();
@@ -578,7 +583,18 @@ impl Component for Shell {
             Theme::Light => WindowTheme::Light,
             Theme::System => WindowTheme::System,
         };
-        context.window_visuals(WindowVisuals::new().client_size(1280.0, 800.0).theme(theme));
+        let backdrop = match self.settings.material {
+            Material::Mica => WindowBackdrop::Mica,
+            Material::MicaAlt => WindowBackdrop::MicaAlt,
+            Material::Acrylic => WindowBackdrop::Acrylic,
+            Material::None => WindowBackdrop::None,
+        };
+        context.window_visuals(
+            WindowVisuals::new()
+                .client_size(1280.0, 800.0)
+                .theme(theme)
+                .backdrop(backdrop),
+        );
 
         let theme_label = match self.settings.theme {
             Theme::Dark => "Theme: Dark",

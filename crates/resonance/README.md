@@ -57,6 +57,8 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   JSON under `%LOCALAPPDATA%\Resonance`.
 - **Theme** — Dark / Light / System toggle in the title bar
   (dark-first, matching the Resonance design system).
+- **Window material** — Mica (default), Mica Alt, Acrylic, or Solid,
+  switchable in Settings → Window material; persisted in settings.
 
 ## Pages
 
@@ -67,7 +69,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Queue | Live — current playback queue from the player bar; playing a row starts the queue there |
 | Search | Live — AutoSuggestBox suggestions + Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists (persisted locally) |
-| Settings | Live — theme, stream quality, volume, autoplay, about |
+| Settings | Live — theme, window material (Mica default), stream quality, volume, autoplay, about |
 
 ## Layout
 

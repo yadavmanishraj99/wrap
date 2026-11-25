@@ -67,6 +67,28 @@ impl RepeatMode {
     }
 }
 
+/// Window backdrop material (WinUI `WindowBackdrop`). Mica is the
+/// default — the subtle desktop-tinted material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Material {
+    #[default]
+    Mica,
+    MicaAlt,
+    Acrylic,
+    None,
+}
+
+impl Material {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Mica => "Mica",
+            Self::MicaAlt => "Mica Alt",
+            Self::Acrylic => "Acrylic",
+            Self::None => "Solid (no material)",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: Theme,
@@ -79,6 +101,9 @@ pub struct Settings {
     /// Repeat mode for the end of the queue.
     #[serde(default)]
     pub repeat: RepeatMode,
+    /// Window backdrop material (Mica by default).
+    #[serde(default)]
+    pub material: Material,
 }
 
 impl Default for Settings {
@@ -90,6 +115,7 @@ impl Default for Settings {
             autoplay: true,
             shuffle: false,
             repeat: RepeatMode::Off,
+            material: Material::Mica,
         }
     }
 }

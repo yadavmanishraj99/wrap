@@ -5,7 +5,7 @@
 use windows_reactor::*;
 
 use crate::app::{Message, Shell};
-use crate::store::{QualitySetting, Theme};
+use crate::store::{Material, QualitySetting, Theme};
 use crate::views;
 
 fn radio(
@@ -56,6 +56,41 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                     "theme",
                     settings.theme == Theme::System,
                     Message::SetTheme(Theme::System),
+                    context,
+                ),
+            )),
+            StackPanel::new().spacing(8.0).children((
+                views::section_header("Window material"),
+                TextBlock::new()
+                    .text("Backdrop behind the window. Mica is the default.")
+                    .font_size(12.0)
+                    .opacity(0.7),
+                radio(
+                    Material::Mica.label(),
+                    "material",
+                    settings.material == Material::Mica,
+                    Message::SetMaterial(Material::Mica),
+                    context,
+                ),
+                radio(
+                    Material::MicaAlt.label(),
+                    "material",
+                    settings.material == Material::MicaAlt,
+                    Message::SetMaterial(Material::MicaAlt),
+                    context,
+                ),
+                radio(
+                    Material::Acrylic.label(),
+                    "material",
+                    settings.material == Material::Acrylic,
+                    Message::SetMaterial(Material::Acrylic),
+                    context,
+                ),
+                radio(
+                    Material::None.label(),
+                    "material",
+                    settings.material == Material::None,
+                    Message::SetMaterial(Material::None),
                     context,
                 ),
             )),
