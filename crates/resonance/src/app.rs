@@ -1238,12 +1238,15 @@ impl Component for Shell {
             ])
             .keyed_children(shell_children);
 
-        // Overlay layer (context menu / Properties dialog) sits in
-        // the same root cell, painted above the shell. It only
-        // exists while a menu or dialog is open.
-        if self.menu.is_none() && self.properties.is_none() {
-            return shell_grid;
-        }
+        // The overlay layer (context menu / Properties dialog) is
+        // ALWAYS in the tree, as a sibling of the shell in the same
+        // root cell, painted above it. It is empty while no menu or
+        // dialog is open, so it never intercepts pointer input.
+        // Keeping it mounted means opening a menu only adds children
+        // inside the overlay — the shell itself is never reparented.
+        // (Reparenting the whole shell on every menu open crashed
+        // the app with a stack buffer overrun when the More button
+        // was clicked.)
         let mut root: Vec<KeyedView> = vec![KeyedView::new("shell", shell_grid)];
         root.push(KeyedView::new("overlay", self.overlay_view(context)));
         Grid::new()
@@ -1258,14 +1261,21 @@ impl Shell {
     /// menu and dialog (not their parent), so presses on the menu
     /// itself never reach it.
     fn overlay_view(&self, context: &mut ViewContext<Self>) -> View {
-        let mut layers: Vec<KeyedView> = vec![KeyedView::new(
-            "dismiss",
-            Border::new()
-                .background(Brush::Solid(Color::transparent()))
-                .on_pointer_pressed(
-                    context.callback(|_info: PointerEventInfo| Message::CloseOverlay),
-                ),
-        )];
+        // The click-away layer is only mounted while a menu or
+        // dialog is open — the overlay itself is always in the tree
+        // (see view()), so an always-on dismiss layer would swallow
+        // every click on the shell.
+        let mut layers: Vec<KeyedView> = vec![];
+        if self.menu.is_some() || self.properties.is_some() {
+            layers.push(KeyedView::new(
+                "dismiss",
+                Border::new()
+                    .background(Brush::Solid(Color::transparent()))
+                    .on_pointer_pressed(
+                        context.callback(|_info: PointerEventInfo| Message::CloseOverlay),
+                    ),
+            ));
+        }
         if let Some(menu) = &self.menu {
             layers.push(KeyedView::new("menu", self.menu_view(menu, context)));
         }
@@ -1445,8 +1455,19 @@ impl Shell {
     /// Open the context menu at window coordinates, clamped so the
     /// ~220x150 menu stays inside the 1280x800 window.
     fn open_menu(&mut self, target: DetailsTarget, x: f64, y: f64) {
-        let x = x.clamp(0.0, 1280.0 - 230.0);
-        let y = y.clamp(0.0, 800.0 - 160.0);
+        // Guard against non-finite coordinates: a NaN/infinite
+        // margin corrupts the native layout pass. A bad value falls
+        // back to the top-left.
+        let x = if x.is_finite() {
+            x.clamp(0.0, 1280.0 - 230.0)
+        } else {
+            0.0
+        };
+        let y = if y.is_finite() {
+            y.clamp(0.0, 800.0 - 160.0)
+        } else {
+            0.0
+        };
         self.menu = Some(MenuState { target, x, y });
     }
 

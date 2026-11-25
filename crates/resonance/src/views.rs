@@ -250,7 +250,15 @@ pub fn media_card(
             .on_pointer_pressed(card_press(target.clone(), context))
             .content(art_view),
     )];
-    if hovered {
+    // Keep the hover buttons mounted while the context menu is open
+    // for this card: opening the menu moves the pointer onto the
+    // menu, which would otherwise fire PointerExited and yank the
+    // pressed More button out of the tree mid-press.
+    let menu_open = shell
+        .menu
+        .as_ref()
+        .is_some_and(|m| m.target.kind == target.kind && m.target.id == target.id);
+    if hovered || menu_open {
         let play_target = target.clone();
         art_children.push(KeyedView::new(
             "play",
