@@ -1298,7 +1298,8 @@ impl Shell {
             .horizontal_alignment(HorizontalAlignment::Left)
             .vertical_alignment(VerticalAlignment::Top)
             .margin(Thickness::new(menu.x, menu.y, 0.0, 0.0))
-            .background(Brush::Theme(ThemeBrush::CardBackground))
+            // Opaque: a menu must not let the page show through it.
+            .background(Brush::Theme(ThemeBrush::SolidBackground))
             .border_brush(Brush::Theme(ThemeBrush::CardStroke))
             .border_thickness(1.0)
             .corner_radius(CornerRadius::uniform(8.0))
@@ -1381,7 +1382,8 @@ impl Shell {
             .width(380.0)
             .horizontal_alignment(HorizontalAlignment::Center)
             .vertical_alignment(VerticalAlignment::Center)
-            .background(Brush::Theme(ThemeBrush::CardBackground))
+            // Opaque: a dialog must not let the page show through it.
+            .background(Brush::Theme(ThemeBrush::SolidBackground))
             .border_brush(Brush::Theme(ThemeBrush::CardStroke))
             .border_thickness(1.0)
             .corner_radius(CornerRadius::uniform(12.0))
@@ -1580,11 +1582,11 @@ impl Shell {
         self.playing = self.player.is_playing();
         self.position = self.player.position_secs();
         self.duration = self.player.duration_secs();
+        // The Now Playing sidebar never opens on its own: it only
+        // opens and closes from the player bar's Now playing button
+        // (ToggleNowPlaying). A track starting just refreshes what
+        // the sidebar shows, when it is open.
         if self.player.has_current() {
-            // A track starting opens the Now Playing sidebar, so the
-            // details are there the moment media plays. Hiding it is
-            // a toggle; the next track start opens it again.
-            self.now_playing_open = true;
             spawn_tick(context);
         }
         // The session's status follows the track (Playing while it
@@ -1860,20 +1862,19 @@ impl Shell {
     }
 
     /// The Now Playing sidebar: a 340px panel on the right of the
-    /// content row, shown when media starts playing. Top to bottom:
-    /// a Next-in-queue card (with a button for the full queue), then
-    /// the now-playing details — big art, title, clickable artists,
-    /// album, Like. The close button and the player bar's Now playing
-    /// toggle hide it; the next track start opens it again.
-    /// The Now Playing sidebar: a 340px panel on the right of the
-    /// content row, shown when media starts playing. Acrylic (a
-    /// translucent fill over Mica — the old solid fill hid the page
-    /// behind it entirely). Top to bottom: the current song's
-    /// details, the main artist's brief [picture, details], then
-    /// the next song in the queue with the Show full queue button
-    /// (which opens the queue overlay over the whole sidebar). The
-    /// close button and the player bar's Now playing toggle hide
-    /// it; the next track start opens it again.
+    /// content row. It only opens and closes from the player bar's
+    /// Now playing button (ToggleNowPlaying) — a track starting
+    /// never opens it on its own. Frosted glass: the window
+    /// backdrop is Acrylic by default, and this panel's translucent
+    /// fill lets that blur show through (Reactor 0.100 has no
+    /// AcrylicBrush for a single panel, so the window material is
+    /// what makes it frosted; Mica Alt is the fallback in Settings).
+    /// Top to bottom: the current song's details, the main artist's
+    /// brief [picture, details], then the next song in the queue
+    /// with the Show full queue button (which opens the queue
+    /// overlay over the whole sidebar). The close button and the
+    /// player bar's Now playing toggle hide it; it stays hidden
+    /// until the toggle is pressed again.
     fn now_playing_sidebar(&self, context: &mut ViewContext<Self>) -> View {
         let mut rows: Vec<KeyedView> = vec![KeyedView::new(
             "header",

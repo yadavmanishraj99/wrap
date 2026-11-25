@@ -71,9 +71,9 @@ impl RepeatMode {
 /// default — the subtle desktop-tinted material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Material {
-    #[default]
     Mica,
     MicaAlt,
+    #[default]
     Acrylic,
     None,
 }
@@ -101,7 +101,11 @@ pub struct Settings {
     /// Repeat mode for the end of the queue.
     #[serde(default)]
     pub repeat: RepeatMode,
-    /// Window backdrop material (Mica by default).
+    /// Window backdrop material (Acrylic by default — frosted glass
+    /// for the Now Playing sidebar, which is translucent over the
+    /// window. Acrylic is supported on every OS that can run WinUI 3
+    /// — Windows 10 1809 and later — so it is the default; Mica Alt
+    /// is the fallback, pickable in Settings).
     #[serde(default)]
     pub material: Material,
 }
@@ -115,7 +119,7 @@ impl Default for Settings {
             autoplay: true,
             shuffle: false,
             repeat: RepeatMode::Off,
-            material: Material::Mica,
+            material: Material::Acrylic,
         }
     }
 }

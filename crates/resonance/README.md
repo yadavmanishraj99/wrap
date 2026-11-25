@@ -124,15 +124,28 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   `%LOCALAPPDATA%\Resonance`.
 - **Theme** — Dark / Light / System toggle in the title bar
   (dark-first, matching the Resonance design system).
-- **Window material** — Mica (default), Mica Alt, Acrylic, or Solid,
+- **Window material** — Acrylic (default, frosted glass), Mica, Mica Alt, or Solid,
   switchable in Settings → Window material; persisted in settings.
 - **Context menu** — right-click (or the hover more button) on any
   Home card: Play, Play next (queues right after the current song,
   or starts playing when nothing is), Properties (title, type,
-  duration/year/album or song count in a dialog). Pointer events
-  exist only on `Border` in windows-reactor 0.100, so every
-  press/hover handler sits on a Border and the menu's click-away
-  layer is a sibling of the menu, never its parent.
+  duration/year/album or song count in a dialog). This is a custom
+  overlay (a Border in the shell's overlay layer), not a native
+  WinUI MenuFlyout/ContentDialog — Reactor 0.100 does expose a
+  native `Menu` and `ContentDialog`, but the native menu only opens
+  on right-click (it cannot be opened from the More button), and
+  the native dialog has no content setter, so it cannot show the
+  Properties details. The custom menu and dialog are opaque (a
+  solid fill), never translucent. Pointer events exist only on
+  `Border` in windows-reactor 0.100, so every press/hover handler
+  sits on a Border and the menu's click-away layer is a sibling of
+  the menu, never its parent.
+- **Playback disposal** — when a track starts, the previous track's
+  `MediaSource` is closed explicitly (`Close()` releases its stream
+  and network resources at once) instead of leaving it to COM
+  refcounting. Rust's ownership frees the rest: popped details,
+  replaced search/home data, and the capped (50) recents are
+  dropped when no longer needed.
 
 ## Pages
 
@@ -141,10 +154,10 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties). Cards with no art show a placeholder tile (music-note icon on a solid fill). Clicking a song card plays it; any other card opens its page |
 | Details | Live — one page per kind, each with its own layout: Artist (circular art, followers, Play, Top songs, Top albums, Similar artists), Album (art, clickable artist names, year • songs, Play, Like), Playlist / Chart (art, description, Play, Like), Song (art, clickable artists, Play, Like, lyrics when available); title-bar back button returns. Song cards never open this page — they just play. Details are an inner-route stack: opening a details page from inside another details page pushes a new entry, and Back walks back through each one in reverse order (Home → album → album → artist → back → back → back → Home), instead of dropping straight to the page |
 | Queue | Live — the queue panel over the Now Playing sidebar (from its Show full queue button); playing a row starts the queue there; song titles wrap |
-| Now Playing | Live — an acrylic (translucent) 340px sidebar on the right that opens whenever a track starts playing (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which rises in and drops out with a fade + slight scale; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; the next track start opens it again |
+| Now Playing | Live — a frosted-glass 340px sidebar on the right (the window backdrop is Acrylic by default, and this panel's translucent fill lets that blur show through; Mica Alt is the fallback in Settings). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which rises in and drops out with a fade + slight scale; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |
 | Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists (persisted locally), all as Home-style media-card sections; albums and playlists land here via the Like button on their pages |
-| Settings | Live — theme, window material (Mica default), stream quality, autoplay, about |
+| Settings | Live — theme, window material (Acrylic default), stream quality, autoplay, about |
 
 ## Layout
 

@@ -102,6 +102,11 @@ pub struct Player {
     /// setting). Decides whether Next stays enabled on the last
     /// song — with repeat-all it wraps to the start.
     repeat_all: bool,
+    /// The currently loaded media source, kept so it can be closed
+    /// explicitly when the next track starts. `MediaSource::Close`
+    /// releases its stream and network resources at once, instead
+    /// of leaving them to COM refcounting when the player moves on.
+    current_source: Option<MediaSource>,
     pub queue: Vec<Song>,
     pub index: Option<usize>,
 }
@@ -115,6 +120,7 @@ impl Player {
             smtc: None,
             smtc_rx: Some(rx),
             repeat_all: false,
+            current_source: None,
             queue: Vec::new(),
             index: None,
         };
@@ -296,7 +302,7 @@ impl Player {
     }
 
     /// (Re)start playback of the current queue item.
-    pub fn play_current(&self, quality: Quality) -> windows::core::Result<()> {
+    pub fn play_current(&mut self, quality: Quality) -> windows::core::Result<()> {
         let Some(player) = &self.inner else {
             return Ok(());
         };
@@ -309,6 +315,13 @@ impl Player {
         let uri = Uri::CreateUri(&HSTRING::from(url))?;
         let source = MediaSource::CreateFromUri(&uri)?;
         player.SetSource(&source)?;
+        // Dispose the previous track's source now that the player
+        // has moved on: Close() releases its stream and network
+        // resources immediately instead of leaving them to COM
+        // refcounting.
+        if let Some(old) = self.current_source.replace(source) {
+            let _ = old.Close();
+        }
         player.Play()?;
         // A new track: the session shows this song's metadata, the
         // Playing state, and the track length for the seek bar.
