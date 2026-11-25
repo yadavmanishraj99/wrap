@@ -123,9 +123,10 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   affordance. In the Now Playing queue, the row is compact: no
   favorite button and no duration, just art, title/artist, and the
   hover background. The favorite/like button (player bar and song
-  rows) is a small 24px circle with a ~16px icon: greyish when the
-  pointer is not over it, full contrast plus a card fill on hover,
-  in both dark and light mode.
+  rows) is a small 24px circle with a ~16px icon, the circle drawn
+  as a 1px outline (no filled background): greyish when the pointer
+  is not over it, full contrast on hover, in both dark and light
+  mode.
 - **Lyrics** — the song details page shows a song's lyrics when the
   API has them. It currently has no entry point since the player
   bar's lyrics button was removed. No connect-to-device, miniplayer,

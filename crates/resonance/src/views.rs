@@ -368,14 +368,15 @@ fn hover_button(
 
 /// A small circular like button: Add (plus) when not liked,
 /// Favorite (heart) when liked. The circle is 24px; the icon inside
-/// is ~16px. The icon is greyish when the pointer is not over it
-/// (low opacity) and goes to full contrast on hover, and the circle
-/// gains a card fill on hover. The icon uses the theme's foreground
-/// color, dimmed by opacity, so it reads as grey in both dark mode
-/// (white dimmed over the dark page) and light mode (black dimmed
-/// over the light page) — no hardcoded grey that would vanish on
-/// one theme. `None` renders an inert greyed-out Add (no song to
-/// like yet).
+/// is ~16px. The circle is an outline (a 1px border), not a filled
+/// background — the background stays transparent. The icon and the
+/// outline are greyish when the pointer is not over the button (low
+/// opacity) and go to full contrast on hover. They use the theme's
+/// foreground and stroke colors, dimmed by opacity, so they read as
+/// grey in both dark mode (white dimmed over the dark page) and
+/// light mode (black dimmed over the light page) — no hardcoded
+/// grey that would vanish on one theme. `None` renders an inert
+/// greyed-out Add (no song to like yet).
 pub fn like_button(
     song: Option<&Song>,
     grid_column: i32,
@@ -393,11 +394,9 @@ pub fn like_button(
         .width(24.0)
         .height(24.0)
         .corner_radius(CornerRadius::uniform(12.0))
-        .background(if hovered {
-            Brush::Theme(ThemeBrush::CardBackground)
-        } else {
-            Brush::Solid(Color::transparent())
-        })
+        .background(Brush::Solid(Color::transparent()))
+        .border_thickness(1.0)
+        .border_brush(Brush::Theme(ThemeBrush::CardStroke))
         .opacity(if hovered { 1.0 } else { 0.55 })
         .margin(4.0)
         .grid_column(grid_column);
