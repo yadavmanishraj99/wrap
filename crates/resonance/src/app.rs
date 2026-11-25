@@ -160,10 +160,9 @@ pub struct Shell {
     pub position: f64,
     pub duration: f64,
     pub playing: bool,
-    /// Volume muted from the player bar (session-only); the slider
-    /// shows 0 while muted and the pre-mute volume is restored.
+    /// Volume muted from the player bar (session-only); the volume
+    /// flyout's slider shows 0 while muted.
     pub muted: bool,
-    pub pre_mute_volume: f64,
 }
 
 #[derive(Clone)]
@@ -222,7 +221,6 @@ pub enum Message {
     CloseQueueOverlay,
     ToggleShuffle,
     CycleRepeat,
-    ToggleMute,
     Back,
     SetTheme(Theme),
     SetMaterial(Material),
@@ -755,7 +753,6 @@ impl Component for Shell {
             duration: 0.0,
             playing: false,
             muted: false,
-            pre_mute_volume: 0.8,
         };
         // Start listening for OS media-session button presses.
         shell.spawn_smtc_listener(context);
@@ -938,23 +935,6 @@ impl Component for Shell {
                 self.settings.volume = volume;
                 self.settings.save();
                 self.player.set_volume(volume);
-            }
-            Message::ToggleMute => {
-                if self.muted {
-                    self.muted = false;
-                    let volume = if self.pre_mute_volume > 0.0 {
-                        self.pre_mute_volume
-                    } else {
-                        0.8
-                    };
-                    self.settings.volume = volume;
-                    self.settings.save();
-                    self.player.set_volume(volume);
-                } else {
-                    self.pre_mute_volume = self.settings.volume;
-                    self.muted = true;
-                    self.player.set_volume(0.0);
-                }
             }
             Message::ToggleShuffle => {
                 self.settings.shuffle = !self.settings.shuffle;
@@ -1422,12 +1402,15 @@ impl Shell {
     /// menu and dialog (not their parent), so presses on the menu
     /// itself never reach it.
     fn overlay_view(&self, context: &mut ViewContext<Self>) -> View {
-        // The click-away layer is only mounted while a menu or
-        // dialog is open — the overlay itself is always in the tree
-        // (see view()), so an always-on dismiss layer would swallow
-        // every click on the shell.
+        // The click-away layer is only mounted while the custom
+        // context menu is open — the overlay itself is always in the
+        // tree (see view()), so an always-on dismiss layer would
+        // swallow every click on the shell. The Properties dialog is
+        // a native ContentDialog now, so it dismisses itself (Close
+        // button, Escape, light dismiss) and needs no click-away
+        // layer.
         let mut layers: Vec<KeyedView> = vec![];
-        if self.menu.is_some() || self.properties.is_some() {
+        if self.menu.is_some() {
             layers.push(KeyedView::new(
                 "dismiss",
                 Border::new()
@@ -1481,6 +1464,13 @@ impl Shell {
 
     /// The Properties dialog: title, type, subtitle, and the loaded
     /// details (duration/year for songs, song count for collections).
+    /// The Properties dialog: a real WinUI ContentDialog holding
+    /// the item's details (type, subtitle, duration/year/album or
+    /// song count). The item title is the dialog title; the Close
+    /// button is the dialog's own close button, so there is no
+    /// hand-built Close row. Closing the dialog (Close button,
+    /// Escape, or light dismiss) sends CloseProperties. The dialog
+    /// needs no click-away layer — it dismisses itself.
     fn properties_view(
         &self,
         properties: &PropertiesState,
@@ -1494,14 +1484,6 @@ impl Shell {
             _ => "Playlist",
         };
         let mut rows: Vec<KeyedView> = vec![
-            KeyedView::new(
-                "title",
-                TextBlock::new()
-                    .text(target.title.clone())
-                    .font_size(20.0)
-                    .font_weight(FontWeight::SEMI_BOLD)
-                    .text_wrapping(TextWrapping::Wrap),
-            ),
             KeyedView::new("type", property_row("Type", kind_label)),
             KeyedView::new("subtitle", property_row("Details", &target.subtitle)),
         ];
@@ -1540,22 +1522,14 @@ impl Shell {
                 ));
             }
         }
-        rows.push(KeyedView::new(
-            "close",
-            Button::new()
-                .on_click(context.message(Message::CloseProperties))
-                .content("Close"),
-        ));
-        Border::new()
-            .width(380.0)
-            .horizontal_alignment(HorizontalAlignment::Center)
-            .vertical_alignment(VerticalAlignment::Center)
-            // Opaque: a dialog must not let the page show through it.
-            .background(Brush::Theme(ThemeBrush::SolidBackground))
-            .border_brush(Brush::Theme(ThemeBrush::CardStroke))
-            .border_thickness(1.0)
-            .corner_radius(CornerRadius::uniform(12.0))
-            .padding(24.0)
+        // `.content()` returns a View (not a ContentDialog), so it
+        // must come last — after the title, buttons, open flag and
+        // close callback are all set.
+        ContentDialog::new()
+            .title(target.title.clone())
+            .close_button_text("Close")
+            .is_open(true)
+            .on_closed(context.callback(|_result: ContentDialogResult| Message::CloseProperties))
             .content(StackPanel::new().spacing(12.0).keyed_children(rows))
     }
 }
@@ -1787,6 +1761,11 @@ impl Shell {
                 GridLength::Star(1.0),
                 GridLength::Auto,
             ])
+            // The left section is a fixed 320px, hugging the left
+            // edge, so the art, title and like button stay together
+            // on the left and never drift toward the middle.
+            .width(320.0)
+            .horizontal_alignment(HorizontalAlignment::Left)
             .vertical_alignment(VerticalAlignment::Center)
             .grid_column(0)
             .children((
@@ -1900,14 +1879,20 @@ impl Shell {
                             Message::CycleRepeat,
                         ),
                     )),
+                // The progress row: elapsed time, a seek slider, and
+                // total time. The row is inset from the sides so the
+                // slider is a little narrower, and each timer has a
+                // gap to the slider so the times never stick to it.
                 Grid::new()
                     .columns([GridLength::Auto, GridLength::Star(1.0), GridLength::Auto])
+                    .margin(Thickness::new(16.0, 0.0, 16.0, 0.0))
                     .children((
                         TextBlock::new()
                             .text(views::fmt_time(self.position))
                             .font_size(12.0)
                             .opacity(0.7)
                             .vertical_alignment(VerticalAlignment::Center)
+                            .margin(Thickness::new(0.0, 0.0, 8.0, 0.0))
                             .grid_column(0),
                         Slider::new()
                             .minimum(0.0)
@@ -1920,16 +1905,57 @@ impl Shell {
                             .font_size(12.0)
                             .opacity(0.7)
                             .vertical_alignment(VerticalAlignment::Center)
+                            .margin(Thickness::new(8.0, 0.0, 0.0, 0.0))
                             .grid_column(2),
                     )),
             ));
 
-        // --- Right: now playing, mute + volume, and a More button
-        // at the far right that opens the context menu for the song
-        // now playing. A plain icon button cannot carry the click
-        // position, so this is a Border with a press handler (like
-        // the details action row's More button), not a
-        // bar_icon_button. Inert while nothing is playing.
+        // --- Right: now playing, volume (an icon-only button that
+        // opens a native flyout with a vertical volume slider right
+        // above it), and a More button at the far right. ---
+        // The volume is a real WinUI Button (Subtle style, so it
+        // reads as a bare icon) with a native Flyout attached: a
+        // click opens the flyout above the button, holding a
+        // vertical slider. Dragging the slider to 0 mutes and
+        // dragging it up un-mutes (VolumeChanged handles that), so
+        // no separate mute button is needed; the icon itself shows
+        // the muted state.
+        let volume_value = if self.muted {
+            0.0
+        } else {
+            self.settings.volume
+        };
+        let volume_button = Button::new()
+            .style(ButtonStyle::Subtle)
+            .content(SymbolIcon::new().symbol(if self.muted {
+                Symbol::Mute
+            } else {
+                Symbol::Volume
+            }))
+            .tooltip("Volume")
+            .flyout_with(
+                Flyout::rich(
+                    Slider::new()
+                        .minimum(0.0)
+                        .maximum(1.0)
+                        // Step frequency defaults to 1.0 in WinUI,
+                        // which snapped this 0-1 slider to 0 or 1
+                        // only.
+                        .step_frequency(0.01)
+                        .value(volume_value)
+                        .orientation(Orientation::Vertical)
+                        .height(120.0)
+                        .on_value_changed(
+                            context.callback(|value: f64| Message::VolumeChanged(value)),
+                        ),
+                )
+                .placement(FlyoutPlacement::Top),
+            );
+        // The More button at the far right: a real WinUI Button
+        // (Subtle style, so it reads as a bare icon) carrying a
+        // native context menu (MenuFlyout) for the song now playing.
+        // A click opens the real menu. Inert (dimmed, no menu) while
+        // nothing is playing.
         let more_button: View = match &current {
             Some(song) => {
                 let target = DetailsTarget {
@@ -1939,14 +1965,9 @@ impl Shell {
                     subtitle: views::artist_names(song),
                     art: views::art_url(&song.image, "500x500"),
                 };
-                Border::new()
-                    .width(32.0)
-                    .height(32.0)
-                    .background(Brush::Solid(Color::transparent()))
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
-                        Message::OpenMenu(target.clone(), info.window_x, info.window_y)
-                    }))
+                let is_pinned = self.library.is_pinned(&target.kind, &target.id);
+                Button::new()
+                    .style(ButtonStyle::Subtle)
                     .content(
                         SymbolIcon::new()
                             .symbol(Symbol::More)
@@ -1954,6 +1975,7 @@ impl Shell {
                             .vertical_alignment(VerticalAlignment::Center),
                     )
                     .tooltip("More")
+                    .menu(views::context_menu(&target, is_pinned, context))
             }
             None => Border::new()
                 .width(32.0)
@@ -1972,6 +1994,8 @@ impl Shell {
         let right = StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(4.0)
+            // The right section hugs the right edge.
+            .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Center)
             .margin(8.0)
             .grid_column(2)
@@ -1984,37 +2008,21 @@ impl Shell {
                     true,
                     Message::ToggleNowPlaying,
                 ),
-                Button::new()
-                    .on_click(context.message(Message::ToggleMute))
-                    .content(SymbolIcon::new().symbol(if self.muted {
-                        Symbol::Mute
-                    } else {
-                        Symbol::Volume
-                    }))
-                    .tooltip(if self.muted { "Unmute" } else { "Mute" }),
-                Slider::new()
-                    .minimum(0.0)
-                    .maximum(1.0)
-                    // Step frequency defaults to 1.0 in WinUI, which
-                    // snapped this 0-1 slider to 0 or 1 only.
-                    .step_frequency(0.01)
-                    .value(if self.muted {
-                        0.0
-                    } else {
-                        self.settings.volume
-                    })
-                    .width(100.0)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value)))
-                    .tooltip("Volume"),
+                volume_button,
                 more_button,
             ));
 
         Grid::new()
+            // Three sections: the left section hugs the left edge,
+            // the controls sit in the middle, the right section hugs
+            // the right edge. The two outer columns are equal Star
+            // widths, so the Auto middle column — the controls — is
+            // truly centered in the window, not shifted by the left
+            // section being wider than the right.
             .columns([
-                GridLength::Pixel(320.0),
                 GridLength::Star(1.0),
                 GridLength::Auto,
+                GridLength::Star(1.0),
             ])
             .margin(8.0)
             .grid_row(2)

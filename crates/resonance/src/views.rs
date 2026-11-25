@@ -458,6 +458,38 @@ pub fn like_button(
         })
 }
 
+/// A native WinUI context menu (MenuFlyout) for an item: Play, Play
+/// next, Properties, and Pin/Unpin. Attach it to a real Button (the
+/// More button) — a click opens the real MenuFlyout. The callback
+/// maps the chosen item's label back to the matching message; the
+/// native menu reports the label string, not the key. Pin reads
+/// "Unpin" when the item is already pinned.
+pub fn context_menu(
+    target: &DetailsTarget,
+    is_pinned: bool,
+    context: &mut ViewContext<Shell>,
+) -> Menu {
+    let play_target = target.clone();
+    let next_target = target.clone();
+    let props_target = target.clone();
+    let pin_target = target.clone();
+    Menu::new(
+        [
+            MenuItem::item("play", "Play"),
+            MenuItem::item("playnext", "Play next"),
+            MenuItem::item("properties", "Properties"),
+            MenuItem::item("pin", if is_pinned { "Unpin" } else { "Pin" }),
+        ],
+        context.callback(move |label: String| match label.as_str() {
+            "Play" => Message::MenuPlay(play_target.clone()),
+            "Play next" => Message::MenuPlayNext(next_target.clone()),
+            "Properties" => Message::MenuProperties(props_target.clone()),
+            "Pin" | "Unpin" => Message::TogglePin(pin_target.clone()),
+            _ => Message::Noop,
+        }),
+    )
+}
+
 /// The action row under a details header, left to right: a large
 /// 64x64 circular Play button (filled primary, Play icon centered),
 /// a shuffle icon button (icon only, no container), a circular like
@@ -549,29 +581,24 @@ pub fn details_action_row(
                 .vertical_alignment(VerticalAlignment::Center),
         )
         .tooltip("Download");
-    // More: horizontal ellipsis, icon only, no container. Opens the
-    // item's context menu at the click position.
-    let more_target = target.clone();
-    let more_button = Border::new()
-        .width(32.0)
-        .height(32.0)
-        .background(Brush::Solid(Color::transparent()))
-        .opacity(0.7)
-        .vertical_alignment(VerticalAlignment::Center)
-        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
-            if info.is_left_button_pressed {
-                Message::OpenMenu(more_target.clone(), info.window_x, info.window_y)
-            } else {
-                Message::Noop
-            }
-        }))
+    // The More button: a real WinUI Button (Subtle style, so it
+    // reads as a bare icon) carrying a native context menu
+    // (MenuFlyout). A click opens the real menu; the menu reports
+    // the chosen item's label, which the helper maps back to the
+    // matching action. This replaces the hand-built overlay menu
+    // for this button — the overlay stays only for right-click,
+    // which the native menu cannot do.
+    let is_pinned = shell.library.is_pinned(&target.kind, &target.id);
+    let more_button = Button::new()
+        .style(ButtonStyle::Subtle)
         .content(
             SymbolIcon::new()
                 .symbol(Symbol::More)
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center),
         )
-        .tooltip("More");
+        .tooltip("More")
+        .menu(context_menu(target, is_pinned, context));
 
     let mut items: Vec<KeyedView> = vec![
         KeyedView::new("play", play_button),
