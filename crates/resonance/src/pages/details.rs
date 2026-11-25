@@ -1,8 +1,8 @@
 //! Details page: what a media card opens. Loading and error states
 //! are shared; the loaded content is rendered by the page for its
 //! kind — artist, album, playlist/chart, or song — each with its
-//! own layout. The title bar's back button returns to the page we
-//! came from.
+//! own layout. The back button in the NavigationView header returns
+//! to the page we came from.
 
 use windows_reactor::*;
 
