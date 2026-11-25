@@ -1389,6 +1389,7 @@ impl Component for Shell {
                     // touch (it floats back to the top of the
                     // recent orderings), never a second download.
                     self.catalog.touch_collection(&target.id);
+                    self.spawn_collection_cover(context, &target);
                 } else {
                     self.spawn_download_target(context, target);
                 }
@@ -1408,6 +1409,9 @@ impl Component for Shell {
                 );
                 for row in spawn {
                     self.spawn_download_task(context, row);
+                }
+                if target.kind != "song" {
+                    self.spawn_collection_cover(context, &target);
                 }
             }
             Message::DownloadTargetFailed(_target, _err) => {
@@ -2182,6 +2186,26 @@ impl Shell {
                 Ok(()) => Message::Noop,
                 Err(_) => Message::Noop,
             }
+        });
+    }
+
+    /// Fetch a collection's OWN cover (the album / playlist /
+    /// artist art) into the covers folder, so a downloaded
+    /// collection shows its real picture offline — not a member
+    /// song's art.
+    fn spawn_collection_cover(&self, context: &ComponentContext<Self>, target: &DetailsTarget) {
+        let Some(art) = target.art.clone() else {
+            return;
+        };
+        let download_dir = self.catalog.download_dir.clone();
+        let cover_id = target.id.clone();
+        context.spawn_background(move |_| {
+            data::runtime_handle().block_on(catalog::cache_collection_cover(
+                &download_dir,
+                &cover_id,
+                &art,
+            ));
+            Message::Noop
         });
     }
 

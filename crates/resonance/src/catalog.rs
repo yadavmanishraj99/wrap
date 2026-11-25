@@ -30,9 +30,11 @@
 //! second download.
 //!
 //! Covers live in `covers/<cover_id>.jpg` under the download
-//! folder. A song downloaded as part of a collection shares the
-//! collection's cover (its `cover_id` is the collection id); a
-//! song downloaded on its own uses its own id.
+//! folder. Every song caches its own art under its own id, and
+//! a downloaded collection (album / playlist / artist) also
+//! downloads its OWN cover under the collection id — the
+//! collection's art, not a member song's — so its page and
+//! cards show the right picture offline.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1168,10 +1170,6 @@ impl Catalog {
                 }
                 None => {
                     let mut row = MediaRow::from_song(song, now);
-                    if is_collection {
-                        // Songs of a collection share its cover.
-                        row.cover_id = collection_id.clone();
-                    }
                     row.status = MediaStatus::Queued;
                     row.url = url;
                     self.media.insert(row.id.clone(), row.clone());
@@ -1562,11 +1560,14 @@ impl Catalog {
             catalog.load_refs(&conn);
         }
         // Anything left mid-download when the app closed goes
-        // back to Queued so it resumes on launch.
+        // back to Queued so it resumes on launch. A song's cover
+        // is always its own (an earlier build pointed collection
+        // members at the collection's cover id).
         for row in catalog.media.values_mut() {
             if row.status == MediaStatus::Downloading {
                 row.status = MediaStatus::Queued;
             }
+            row.cover_id = row.id.clone();
         }
         catalog.ensure_downloads_collection();
         catalog.sweep_orphans();
@@ -2137,18 +2138,9 @@ pub fn file_uri(path: &std::path::Path) -> String {
 
 // ---------- the download engine ----------
 
-/// Download a song's cover into `covers/<cover_id>.jpg`, unless
-/// it is already there (covers are shared — an album's songs all
-/// point at the one cover). Best-effort: art never fails a
-/// download.
-async fn cache_cover(row: &MediaRow, download_dir: &std::path::Path) {
-    let Some(url) = row.art.as_ref() else {
-        return;
-    };
-    let path = cover_path(download_dir, &row.cover_id);
-    if path.exists() {
-        return;
-    }
+/// Fetch a cover image into its file. Best-effort: art never
+/// fails a download.
+async fn fetch_cover(url: &str, path: &std::path::Path) {
     if let Some(parent) = path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -2159,8 +2151,30 @@ async fn cache_cover(row: &MediaRow, download_dir: &std::path::Path) {
         return;
     }
     if let Ok(bytes) = response.bytes().await {
-        let _ = tokio::fs::write(&path, &bytes).await;
+        let _ = tokio::fs::write(path, &bytes).await;
     }
+}
+
+/// Download a song's own cover into `covers/<cover_id>.jpg`,
+/// unless it is already there.
+async fn cache_cover(row: &MediaRow, download_dir: &std::path::Path) {
+    let Some(url) = row.art.as_ref() else {
+        return;
+    };
+    let path = cover_path(download_dir, &row.cover_id);
+    if path.exists() {
+        return;
+    }
+    fetch_cover(url, &path).await;
+}
+
+/// Download a collection's OWN cover (the album / playlist /
+/// artist art) into `covers/<collection_id>.jpg`. Called when
+/// a collection download is requested; it overwrites, so the
+/// file always holds the collection's current art.
+pub async fn cache_collection_cover(download_dir: &std::path::Path, cover_id: &str, url: &str) {
+    let path = cover_path(download_dir, cover_id);
+    fetch_cover(url, &path).await;
 }
 
 /// Download one song to `music/<id>.mp3`, resuming a partial
