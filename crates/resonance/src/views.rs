@@ -522,18 +522,33 @@ pub fn skeleton_row(shell: &Shell) -> View {
         ))
 }
 
-/// A section-shaped skeleton: heading bar + one row of `cards`
-/// skeleton cards, 12px apart — the same shape as a real section.
-pub fn skeleton_section(shell: &Shell, cards: usize) -> View {
+/// A section-shaped skeleton: the section's REAL heading (the
+/// layout's static text) + one row of `cards` skeleton cards, 12px
+/// apart — the same shape as the real section, so the placeholder
+/// reads as the page, not a generic stack of bars.
+pub fn skeleton_section(shell: &Shell, title: &str, cards: usize) -> View {
     let mut card_views: Vec<KeyedView> = Vec::new();
     for i in 0..cards {
         card_views.push(KeyedView::new(format!("card{i}"), skeleton_card(shell)));
     }
     StackPanel::new().spacing(8.0).children((
-        skeleton_bar(160.0, 20.0, shell),
+        section_header(title),
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(12.0)
             .keyed_children(card_views),
     ))
+}
+
+/// A button-shaped placeholder (Play / Like), the same rounded
+/// rectangle a real Button is — corner radius 4, not a pill.
+pub fn skeleton_button(width: f64, height: f64, shell: &Shell) -> View {
+    Border::new()
+        .width(width)
+        .height(height)
+        .corner_radius(CornerRadius::uniform(4.0))
+        .background(skeleton_fill(shell.settings.theme))
+        .opacity(shell.skeleton_opacity())
+        .opacity_transition(std::time::Duration::from_millis(300))
+        .into()
 }

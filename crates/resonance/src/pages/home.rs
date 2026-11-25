@@ -35,16 +35,19 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         return super::details::view(shell, context);
     }
     let content: View = if shell.home_loading {
-        // Skeleton: the page's shape while launch data loads —
-        // heading plus three section skeletons, shimmering.
+        // Skeleton: this page's own layout — the four real sections
+        // (Trending now, Top playlists, New albums, Charts) with
+        // their headings and a row of skeleton cards each — so the
+        // placeholder reads as Home, not a generic stack of bars.
         StackPanel::new().margin(24.0).spacing(32.0).children((
             TextBlock::new()
                 .text("Home")
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
-            views::skeleton_section(shell, 5),
-            views::skeleton_section(shell, 5),
-            views::skeleton_section(shell, 5),
+            views::skeleton_section(shell, "Trending now", 5),
+            views::skeleton_section(shell, "Top playlists", 5),
+            views::skeleton_section(shell, "New albums", 5),
+            views::skeleton_section(shell, "Charts", 5),
         ))
     } else if let Some(err) = &shell.home_error {
         StackPanel::new().margin(24.0).spacing(12.0).children((

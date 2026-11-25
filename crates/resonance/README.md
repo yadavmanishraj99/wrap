@@ -43,13 +43,20 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   slider, 1% steps). Nothing in the bar clips: the bar is tall enough for the
   two-line artist area and the progress row.
 - **Skeleton loading** — Home, Search and Details show skeleton
-  placeholders shaped like the real content while they load
-  (heading bars, card/row shapes), shimmering with an opacity
-  pulse, then the loaded content fades in. The fill is a solid
-  gray with real contrast against the page background in both
-  themes (checked with the WCAG formula: dark `#525252`, light
-  `#B2B2B2`; the pulse runs 0.75–1.0 so even the dim phase stays
-  visible).
+  placeholders while they load, then the loaded content fades in.
+  The skeleton is built from each page's own layout, not a generic
+  stack of bars: Home shows its four real sections (Trending now,
+  Top playlists, New albums, Charts) with their headings and a row
+  of skeleton cards each; Search shows its five result sections
+  (Top result, Songs, Albums, Artists, Playlists); a details page
+  shows that kind's header (circular art for an artist, square
+  otherwise; eyebrow / title / subtitle lines; Play and Like button
+  shapes) and its sections (Top songs + Top albums + Similar artists
+  for an artist; Songs for an album/playlist/chart; Lyrics for a
+  song). The fill is a solid gray with real contrast against the
+  page background in both themes (checked with the WCAG formula:
+  dark `#525252`, light `#B2B2B2`; the shimmer pulse runs 0.75–1.0
+  so even the dim phase stays visible).
 - **Search** — typing in the header search field searches whatever
   is typed, live: one `search_all` call per keystroke feeds both the
   autocomplete suggestions and the full results, and typing takes

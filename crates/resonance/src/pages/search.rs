@@ -32,11 +32,17 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         .on_suggestion_chosen(context.callback(|value: String| Message::SuggestionChosen(value)));
 
     let content: View = if shell.search_loading {
-        // Skeleton: the results' shape while search_all loads —
-        // two section skeletons, shimmering.
+        // Skeleton: this page's own layout — the five result
+        // sections (Top result, Songs, Albums, Artists, Playlists)
+        // with their headings and skeleton cards — Top result is
+        // one card, the rest a row each — so the placeholder reads
+        // as the search page, not a generic stack of bars.
         StackPanel::new().spacing(32.0).children((
-            views::skeleton_section(shell, 5),
-            views::skeleton_section(shell, 5),
+            views::skeleton_section(shell, "Top result", 1),
+            views::skeleton_section(shell, "Songs", 5),
+            views::skeleton_section(shell, "Albums", 5),
+            views::skeleton_section(shell, "Artists", 5),
+            views::skeleton_section(shell, "Playlists", 5),
         ))
     } else if let Some(err) = &shell.search_error {
         TextBlock::new()
