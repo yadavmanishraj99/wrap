@@ -42,6 +42,16 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   duration below), extras right (lyrics, queue, mute + volume
   slider, 1% steps). Nothing in the bar clips: the bar is tall enough for the
   two-line artist area and the progress row.
+- **Media session (SMTC)** — the app owns the OS media session
+  instead of letting MediaPlayer's automatic integration run it
+  (that one only offered Play/Pause and showed "Unknown app" +
+  the stream path). The session shows the track's title, artist,
+  album and artwork, Play/Pause/Next/Previous all work (media keys
+  and the OS controls route into the same handlers the player bar
+  uses), and the status follows playback. The app identity is
+  `YadavManishraj.Resonance` (set as the process AppUserModelID and
+  the session's AppMediaId); the name fully resolves once the app
+  is installed/packaged with a matching registered shortcut.
 - **Skeleton loading** — Home, Search and Details show skeleton
   placeholders while they load, then the loaded content fades in.
   The skeleton is built from each page's own layout, not a generic

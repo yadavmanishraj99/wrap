@@ -18,6 +18,8 @@
 //! - `Image::source` returns `Result` (URI validation) — handle it.
 //! - `FontWeight` uses `BOLD` / `SEMI_BOLD` constants.
 
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use saavnapi::{Album, Artist, ArtistArgs, LaunchData, Playlist, SearchAll, Song};
@@ -25,7 +27,7 @@ use windows_reactor::*;
 
 use crate::data;
 use crate::pages;
-use crate::player::{Player, Quality};
+use crate::player::{Player, Quality, SmtcCommand};
 use crate::store::{Library, Material, QualitySetting, RepeatMode, Settings, Theme};
 use crate::views;
 
@@ -157,6 +159,11 @@ pub struct Shell {
     pub library: Library,
     pub settings: Settings,
     pub player: Player,
+    /// The SMTC button channel's receiving end, shared with the
+    /// listener the Shell spawns (one listener at a time, blocking
+    /// on recv; the Smtc handler re-spawns it after each press).
+    /// None when the player has no media session (no audio device).
+    pub smtc_rx: Option<Arc<Mutex<Receiver<SmtcCommand>>>>,
     pub position: f64,
     pub duration: f64,
     pub playing: bool,
@@ -205,6 +212,10 @@ pub enum Message {
     CloseProperties,
     OpenQueue,
     ToggleNowPlaying,
+    /// A button press from the OS media session (SMTC). The handler
+    /// re-spawns the listener first, then routes the press through
+    /// the same PlayPause / Next / Previous handlers the UI uses.
+    Smtc(SmtcCommand),
     ArtistBriefLoaded(String, Result<Artist, String>),
     OpenQueueOverlay,
     QueueOverlayShown,
@@ -448,15 +459,20 @@ impl Component for Shell {
     fn create(_input: &(), context: &ComponentContext<Self>) -> Self {
         let settings = Settings::load();
         let library = Library::load();
-        let player = Player::new();
+        let mut player = Player::new();
         player.set_volume(settings.volume);
+        // The media session's button channel: the Shell listens for
+        // OS play/pause/next/previous presses on it.
+        let smtc_rx = player
+            .take_smtc_receiver()
+            .map(|rx| Arc::new(Mutex::new(rx)));
 
         // Home data loads in the background as the shell opens, so
         // the skeleton shimmer starts with it.
         spawn_home_load(context);
         spawn_skeleton_pulse(context);
 
-        Self {
+        let shell = Self {
             page: Page::Home,
             details: Vec::new(),
             details_seq: 0,
@@ -486,12 +502,16 @@ impl Component for Shell {
             library,
             settings,
             player,
+            smtc_rx,
             position: 0.0,
             duration: 0.0,
             playing: false,
             muted: false,
             pre_mute_volume: 0.8,
-        }
+        };
+        // Start listening for OS media-session button presses.
+        shell.spawn_smtc_listener(context);
+        shell
     }
 
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
@@ -587,6 +607,25 @@ impl Component for Shell {
                 // playing/position/duration refresh, opening the Now
                 // Playing sidebar, the artist-brief fetch, the tick.
                 self.after_track_change(context);
+            }
+            Message::Smtc(cmd) => {
+                // Re-spawn the listener first, so there is always
+                // one waiting for the next press, then route the
+                // press through the same handlers the UI uses.
+                self.spawn_smtc_listener(context);
+                match cmd {
+                    // The session only shows Play while paused and
+                    // Pause while playing, so the toggle is safe.
+                    SmtcCommand::Play | SmtcCommand::Pause => {
+                        self.update(Message::PlayPause, context);
+                    }
+                    SmtcCommand::Next => {
+                        self.update(Message::Next, context);
+                    }
+                    SmtcCommand::Previous => {
+                        self.update(Message::Previous, context);
+                    }
+                }
             }
             Message::PlayPause => {
                 self.playing = self.player.toggle();
@@ -759,6 +798,11 @@ impl Component for Shell {
                 } else if self.player.has_current() {
                     spawn_tick(context);
                 }
+                // Keep the media session's status in step with the
+                // player — this is what catches a track ending with
+                // repeat off and autoplay off, where the player just
+                // stops and no play/pause handler runs.
+                self.player.sync_smtc_status();
             }
             Message::SkeletonPulse => {
                 // Flip the shimmer phase; keep the loop going only
@@ -1332,6 +1376,25 @@ impl Shell {
         }
     }
 
+    /// Listen for one OS media-session button press: block on the
+    /// SMTC channel (on the thread pool) and return the press as a
+    /// message. The Smtc handler re-spawns this after each press,
+    /// so there is always exactly one listener waiting. A dropped
+    /// channel (no media session) returns Noop and is not
+    /// re-spawned.
+    fn spawn_smtc_listener(&self, context: &ComponentContext<Self>) {
+        let Some(rx) = self.smtc_rx.clone() else {
+            return;
+        };
+        context.spawn_background(move |_| {
+            let cmd = rx.lock().ok().and_then(|rx| rx.recv().ok());
+            match cmd {
+                Some(cmd) => Message::Smtc(cmd),
+                None => Message::Noop,
+            }
+        });
+    }
+
     fn after_track_change(&mut self, context: &ComponentContext<Self>) {
         if let Some(song) = self.player.current() {
             self.library.push_recent(song.clone());
@@ -1366,6 +1429,9 @@ impl Shell {
             self.now_playing_open = true;
             spawn_tick(context);
         }
+        // The session's status follows the track (Playing while it
+        // plays, Paused once it stops).
+        self.player.sync_smtc_status();
     }
 
     /// The persistent bottom player bar (96px), modeled on Spotify's

@@ -6,11 +6,37 @@
 //! device, headless test run) degrades to a no-op player instead of
 //! crashing the app.
 
+use std::sync::mpsc::{Receiver, Sender};
+
 use saavnapi::Song;
-use windows::Foundation::{TimeSpan, Uri};
+use windows::Foundation::{TimeSpan, TypedEventHandler, Uri};
 use windows::Media::Core::MediaSource;
 use windows::Media::Playback::{MediaPlaybackState, MediaPlayer};
+use windows::Media::{
+    MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
+    SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
+};
+use windows::Storage::Streams::RandomAccessStreamReference;
 use windows::core::HSTRING;
+
+/// The Windows app identity this process runs under. Set as the
+/// process AppUserModelID at startup (main.rs) and as the media
+/// session's AppMediaId, so the session (and the taskbar) shows
+/// "Resonance" instead of "Unknown app". The name fully resolves
+/// once the app is installed/packaged with a matching registered
+/// shortcut; for a `cargo run` build this is best-effort.
+pub const APP_USER_MODEL_ID: &str = "YadavManishraj.Resonance";
+
+/// A button press from the OS media session (SMTC), delivered to
+/// the Shell over a channel — the WinRT event handler runs on a
+/// system thread, so it cannot send a Reactor message directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtcCommand {
+    Play,
+    Pause,
+    Next,
+    Previous,
+}
 
 /// Stream quality, mapped onto saavnapi's `download_url` qualities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,19 +75,160 @@ pub fn pick_url(song: &Song, quality: Quality) -> Option<String> {
         .map(|link| link.url.clone())
 }
 
+/// The primary artist names, comma-joined, for the media session's
+/// artist field (same shape as the UI's artist line).
+fn artist_names(song: &Song) -> String {
+    if song.artists.primary.is_empty() {
+        "Unknown artist".to_string()
+    } else {
+        song.artists
+            .primary
+            .iter()
+            .map(|artist| artist.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 pub struct Player {
     inner: Option<MediaPlayer>,
+    /// The OS media session we own (direct SMTC, see setup_smtc).
+    smtc: Option<SystemMediaTransportControls>,
+    /// The receiving end of the SMTC button channel; the Shell
+    /// takes it once and listens for button presses on it.
+    smtc_rx: Option<Receiver<SmtcCommand>>,
     pub queue: Vec<Song>,
     pub index: Option<usize>,
 }
 
 impl Player {
     pub fn new() -> Self {
-        Self {
-            inner: MediaPlayer::new().ok(),
+        let inner = MediaPlayer::new().ok();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut player = Self {
+            inner,
+            smtc: None,
+            smtc_rx: Some(rx),
             queue: Vec::new(),
             index: None,
+        };
+        player.setup_smtc(tx);
+        player
+    }
+
+    /// Hand the SMTC button channel's receiving end to the Shell
+    /// (once); the Shell listens for presses on it.
+    pub fn take_smtc_receiver(&mut self) -> Option<Receiver<SmtcCommand>> {
+        self.smtc_rx.take()
+    }
+
+    /// Own the OS media session instead of letting the player's
+    /// automatic integration run it. The automatic session only
+    /// offers Play/Pause (Next/Previous are disabled by default)
+    /// and carries no metadata, which is why the session showed
+    /// "Unknown app" and the stream path. With the CommandManager
+    /// off we enable all four buttons, route presses into the
+    /// Shell over a channel, and set the track metadata ourselves.
+    fn setup_smtc(&mut self, tx: Sender<SmtcCommand>) {
+        let Some(player) = &self.inner else {
+            return;
+        };
+        if let Ok(manager) = player.CommandManager() {
+            let _ = manager.SetIsEnabled(false);
         }
+        let Ok(smtc) = player.SystemMediaTransportControls() else {
+            return;
+        };
+        let _ = smtc.SetIsEnabled(true);
+        let _ = smtc.SetIsPlayEnabled(true);
+        let _ = smtc.SetIsPauseEnabled(true);
+        let _ = smtc.SetIsNextEnabled(true);
+        let _ = smtc.SetIsPreviousEnabled(true);
+        // Button presses arrive on a system thread; forward them to
+        // the Shell over the channel (the handler cannot send a
+        // Reactor message directly). Buttons we don't route are
+        // ignored.
+        let _ = smtc.ButtonPressed(&TypedEventHandler::<
+            SystemMediaTransportControls,
+            SystemMediaTransportControlsButtonPressedEventArgs,
+        >::new(move |_, args| {
+            let button = args.ok()?.Button()?;
+            let cmd = match button {
+                SystemMediaTransportControlsButton::Play => Some(SmtcCommand::Play),
+                SystemMediaTransportControlsButton::Pause => Some(SmtcCommand::Pause),
+                SystemMediaTransportControlsButton::Next => Some(SmtcCommand::Next),
+                SystemMediaTransportControlsButton::Previous => Some(SmtcCommand::Previous),
+                _ => None,
+            };
+            if let Some(cmd) = cmd {
+                let _ = tx.send(cmd);
+            }
+            Ok(())
+        }));
+        self.smtc = Some(smtc);
+    }
+
+    /// Push the current song's metadata (title, artist, album,
+    /// artwork) into the media session, so the OS controls show the
+    /// track instead of the stream path. Best-effort throughout.
+    fn update_smtc_metadata(&self) {
+        let Some(smtc) = &self.smtc else {
+            return;
+        };
+        let Some(song) = self.current() else {
+            return;
+        };
+        let Ok(updater) = smtc.DisplayUpdater() else {
+            return;
+        };
+        let _ = updater.SetType(MediaPlaybackType::Music);
+        let _ = updater.SetAppMediaId(&HSTRING::from(APP_USER_MODEL_ID));
+        if let Ok(music) = updater.MusicProperties() {
+            let _ = music.SetTitle(&HSTRING::from(song.name.clone()));
+            let _ = music.SetArtist(&HSTRING::from(artist_names(song)));
+            let _ =
+                music.SetAlbumTitle(&HSTRING::from(song.album.name.clone().unwrap_or_default()));
+            if let Some(artist) = song.artists.primary.first() {
+                let _ = music.SetAlbumArtist(&HSTRING::from(artist.name.clone()));
+            }
+        }
+        // Artwork thumbnail, from the song's image URL.
+        if let Some(url) = song
+            .image
+            .iter()
+            .find(|link| link.quality == "500x500")
+            .or_else(|| song.image.last())
+            .map(|link| link.url.clone())
+            && let Ok(uri) = Uri::CreateUri(&HSTRING::from(url))
+            && let Ok(thumb) = RandomAccessStreamReference::CreateFromUri(&uri)
+        {
+            let _ = updater.SetThumbnail(&thumb);
+        }
+        let _ = updater.Update();
+    }
+
+    /// Push the playback state (Playing / Paused / Stopped) into the
+    /// media session, from the actual player state.
+    fn update_smtc_status(&self) {
+        let Some(smtc) = &self.smtc else {
+            return;
+        };
+        let status = if self.is_playing() {
+            MediaPlaybackStatus::Playing
+        } else if self.has_current() {
+            MediaPlaybackStatus::Paused
+        } else {
+            MediaPlaybackStatus::Stopped
+        };
+        let _ = smtc.SetPlaybackStatus(status);
+    }
+
+    /// Re-read the player state and push it to the media session.
+    /// Called when the player stops on its own (a track ending with
+    /// repeat off and autoplay off), where no play/pause handler
+    /// runs to update the session.
+    pub fn sync_smtc_status(&self) {
+        self.update_smtc_status();
     }
 
     pub fn current(&self) -> Option<&Song> {
@@ -94,6 +261,10 @@ impl Player {
         let source = MediaSource::CreateFromUri(&uri)?;
         player.SetSource(&source)?;
         player.Play()?;
+        // A new track: the session shows this song's metadata and
+        // the Playing state.
+        self.update_smtc_metadata();
+        self.update_smtc_status();
         Ok(())
     }
 
@@ -101,6 +272,7 @@ impl Player {
         if let Some(player) = &self.inner {
             player.Play()?;
         }
+        self.update_smtc_status();
         Ok(())
     }
 
@@ -108,6 +280,7 @@ impl Player {
         if let Some(player) = &self.inner {
             player.Pause()?;
         }
+        self.update_smtc_status();
         Ok(())
     }
 
