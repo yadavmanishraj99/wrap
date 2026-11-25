@@ -38,10 +38,11 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   one line with an ellipsis, up to two lines of clickable artist
   names — each opens that artist's page — add-to-liked button),
   controls + progress stacked center (shuffle, previous, large
-  filled circular play/pause, next, repeat; elapsed / seek slider /
-  duration below), extras right (lyrics, queue, mute + volume
-  slider, 1% steps). Nothing in the bar clips: the bar is tall enough for the
-  two-line artist area and the progress row.
+  filled circular play/pause, next, repeat — the four around the
+  play button are borderless icon buttons; every button in the bar
+  has a tooltip), extras right (icon-only Now playing toggle, mute
+  + volume slider, 1% steps). Nothing in the bar clips: the bar is
+  tall enough for the two-line artist area and the progress row.
 - **Media session (SMTC)** — the app owns the OS media session
   instead of letting MediaPlayer's automatic integration run it
   (that one only offered Play/Pause and showed "Unknown app" +
@@ -108,11 +109,15 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   off → all → one — repeat-one restarts the song, repeat-all wraps to
   the start of the queue, and repeat wins over the autoplay setting
   at the end of a track.
-- **Queue page** — the player bar's queue button opens the current
-  queue ("Up next"); playing a row starts the queue there.
-- **Lyrics** — the player bar's lyrics button opens the current
-  song's details page, which shows its lyrics when the API has them.
-  No connect-to-device, miniplayer, or fullscreen: windows-reactor
+- **Queue** — the Now Playing sidebar's Show full queue button opens
+  a queue panel over the whole sidebar (Queue + close button, the
+  queue's song rows); playing a row starts the queue there. The
+  full Queue page still exists in code but has no entry point since
+  the player bar's queue button was removed.
+- **Lyrics** — the song details page shows a song's lyrics when the
+  API has them. It currently has no entry point since the player
+  bar's lyrics button was removed. No connect-to-device, miniplayer,
+  or fullscreen: windows-reactor
   0.100 exposes no API for them.
 - **Persistence** — liked songs, albums and playlists, plus
   recents and settings, saved as JSON under
@@ -135,11 +140,11 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | --- | --- |
 | Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties). Cards with no art show a placeholder tile (music-note icon on a solid fill). Clicking a song card plays it; any other card opens its page |
 | Details | Live — one page per kind, each with its own layout: Artist (circular art, followers, Play, Top songs, Top albums, Similar artists), Album (art, clickable artist names, year • songs, Play, Like), Playlist / Chart (art, description, Play, Like), Song (art, clickable artists, Play, Like, lyrics when available); title-bar back button returns. Song cards never open this page — they just play. Details are an inner-route stack: opening a details page from inside another details page pushes a new entry, and Back walks back through each one in reverse order (Home → album → album → artist → back → back → back → Home), instead of dropping straight to the page |
-| Queue | Live — current playback queue from the player bar; playing a row starts the queue there; song titles wrap |
-| Now Playing | Live — an opaque 340px sidebar on the right that opens whenever a track starts playing (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which rises in and drops out with a fade + slight scale; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; the next track start opens it again |
+| Queue | Live — the queue panel over the Now Playing sidebar (from its Show full queue button); playing a row starts the queue there; song titles wrap |
+| Now Playing | Live — an acrylic (translucent) 340px sidebar on the right that opens whenever a track starts playing (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which rises in and drops out with a fade + slight scale; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; the next track start opens it again |
 | Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists (persisted locally), all as Home-style media-card sections; albums and playlists land here via the Like button on their pages |
-| Settings | Live — theme, window material (Mica default), stream quality, volume, autoplay, about |
+| Settings | Live — theme, window material (Mica default), stream quality, autoplay, about |
 
 ## Layout
 

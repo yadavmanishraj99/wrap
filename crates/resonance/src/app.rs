@@ -233,7 +233,6 @@ pub enum Message {
     PlayNext(Vec<Song>),
     PropertiesLoaded(Result<DetailsContent, String>),
     CloseProperties,
-    OpenQueue,
     ToggleNowPlaying,
     /// A button press from the OS media session (SMTC). The handler
     /// re-spawns the listener first, then routes the press through
@@ -470,6 +469,40 @@ fn spawn_search_debounce(context: &ComponentContext<Shell>, seq: u64, query: Str
         std::thread::sleep(Duration::from_millis(300));
         Message::SearchDebounced(seq, query)
     });
+}
+
+/// A borderless icon button for the player bar: a transparent
+/// Border with a centered SymbolIcon (no WinUI Button chrome — a
+/// Button has no background setter in 0.100, so its border can't
+/// be removed), a tooltip, and a pointer-press handler. `enabled`
+/// gates the press; the icon dims to 0.4 when it is false.
+fn bar_icon_button(
+    context: &mut ViewContext<Shell>,
+    icon: Symbol,
+    tooltip: &str,
+    opacity: f64,
+    enabled: bool,
+    message: Message,
+) -> View {
+    Border::new()
+        .width(32.0)
+        .height(32.0)
+        .background(Brush::Solid(Color::transparent()))
+        .opacity(opacity)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if enabled && info.is_left_button_pressed {
+                message.clone()
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(icon)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip(tooltip)
 }
 
 fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
@@ -755,23 +788,6 @@ impl Component for Shell {
                 // wraps on the last song when repeat-all is on).
                 self.player
                     .set_repeat_all(self.settings.repeat == RepeatMode::All);
-            }
-            Message::OpenQueue => {
-                let changed = self.page != Page::Queue;
-                if changed {
-                    self.back_page = self.page;
-                }
-                // The queue replaces whatever is showing, details
-                // drill-in included — and the Now Playing sidebar
-                // closes, since the full queue is the queue view.
-                self.details.clear();
-                self.page = Page::Queue;
-                self.now_playing_open = false;
-                self.queue_overlay_mounted = false;
-                self.queue_overlay_shown = false;
-                if changed {
-                    self.start_page_transition(context);
-                }
             }
             Message::ToggleNowPlaying => {
                 self.now_playing_open = !self.now_playing_open;
@@ -1615,11 +1631,17 @@ impl Shell {
                     Symbol::Favorite
                 } else {
                     Symbol::Add
-                })),
+                }))
+                .tooltip(if liked {
+                    "Remove from liked songs"
+                } else {
+                    "Add to liked songs"
+                }),
             None => Button::new()
                 .grid_column(2)
                 .is_enabled(false)
-                .content(SymbolIcon::new().symbol(Symbol::Add)),
+                .content(SymbolIcon::new().symbol(Symbol::Add))
+                .tooltip("Add to liked songs"),
         };
         let left = Grid::new()
             .columns([
@@ -1672,7 +1694,8 @@ impl Shell {
                     })
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .vertical_alignment(VerticalAlignment::Center),
-            );
+            )
+            .tooltip(if self.playing { "Pause" } else { "Play" });
         let repeat_icon = match self.settings.repeat {
             RepeatMode::One => Symbol::RepeatOne,
             _ => Symbol::RepeatAll,
@@ -1689,25 +1712,55 @@ impl Shell {
                     .spacing(8.0)
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .children((
-                        Button::new()
-                            .is_enabled(has_current)
-                            .opacity(if shuffle_on { 1.0 } else { 0.5 })
-                            .on_click(context.message(Message::ToggleShuffle))
-                            .content(SymbolIcon::new().symbol(Symbol::Shuffle)),
-                        Button::new()
-                            .is_enabled(has_current)
-                            .on_click(context.message(Message::Previous))
-                            .content(SymbolIcon::new().symbol(Symbol::Previous)),
+                        bar_icon_button(
+                            context,
+                            Symbol::Shuffle,
+                            "Shuffle",
+                            if !has_current {
+                                0.4
+                            } else if shuffle_on {
+                                1.0
+                            } else {
+                                0.5
+                            },
+                            has_current,
+                            Message::ToggleShuffle,
+                        ),
+                        bar_icon_button(
+                            context,
+                            Symbol::Previous,
+                            "Previous",
+                            if has_current { 1.0 } else { 0.4 },
+                            has_current,
+                            Message::Previous,
+                        ),
                         play_button,
-                        Button::new()
-                            .is_enabled(has_current)
-                            .on_click(context.message(Message::Next))
-                            .content(SymbolIcon::new().symbol(Symbol::Next)),
-                        Button::new()
-                            .is_enabled(has_current)
-                            .opacity(if repeat_on { 1.0 } else { 0.5 })
-                            .on_click(context.message(Message::CycleRepeat))
-                            .content(SymbolIcon::new().symbol(repeat_icon)),
+                        bar_icon_button(
+                            context,
+                            Symbol::Next,
+                            "Next",
+                            if has_current { 1.0 } else { 0.4 },
+                            has_current,
+                            Message::Next,
+                        ),
+                        bar_icon_button(
+                            context,
+                            repeat_icon,
+                            match self.settings.repeat {
+                                RepeatMode::One => "Repeat one",
+                                RepeatMode::All => "Repeat all",
+                                RepeatMode::Off => "Repeat off",
+                            },
+                            if !has_current {
+                                0.4
+                            } else if repeat_on {
+                                1.0
+                            } else {
+                                0.5
+                            },
+                            has_current,
+                            Message::CycleRepeat,
+                        ),
                     )),
                 Grid::new()
                     .columns([GridLength::Auto, GridLength::Star(1.0), GridLength::Auto])
@@ -1733,21 +1786,7 @@ impl Shell {
                     )),
             ));
 
-        // --- Right: lyrics, queue, mute + volume. ---
-        let lyrics_button: View = match &current {
-            Some(song) => Button::new()
-                .on_click(context.message(Message::OpenDetails(DetailsTarget {
-                    kind: "song".to_string(),
-                    id: song.id.clone(),
-                    title: song.name.clone(),
-                    subtitle: views::artist_names(song),
-                    art: views::art_url(&song.image, "500x500"),
-                })))
-                .content(SymbolIcon::new().symbol(Symbol::MusicInfo)),
-            None => Button::new()
-                .is_enabled(false)
-                .content(SymbolIcon::new().symbol(Symbol::MusicInfo)),
-        };
+        // --- Right: now playing, mute + volume. ---
         let right = StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(4.0)
@@ -1755,20 +1794,22 @@ impl Shell {
             .margin(8.0)
             .grid_column(2)
             .children((
-                Button::new()
-                    .on_click(context.message(Message::ToggleNowPlaying))
-                    .content("Now playing"),
-                lyrics_button,
-                Button::new()
-                    .on_click(context.message(Message::OpenQueue))
-                    .content(SymbolIcon::new().symbol(Symbol::List)),
+                bar_icon_button(
+                    context,
+                    Symbol::Audio,
+                    "Now playing",
+                    1.0,
+                    true,
+                    Message::ToggleNowPlaying,
+                ),
                 Button::new()
                     .on_click(context.message(Message::ToggleMute))
                     .content(SymbolIcon::new().symbol(if self.muted {
                         Symbol::Mute
                     } else {
                         Symbol::Volume
-                    })),
+                    }))
+                    .tooltip(if self.muted { "Unmute" } else { "Mute" }),
                 Slider::new()
                     .minimum(0.0)
                     .maximum(1.0)
@@ -1782,7 +1823,8 @@ impl Shell {
                     })
                     .width(100.0)
                     .vertical_alignment(VerticalAlignment::Center)
-                    .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value))),
+                    .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value)))
+                    .tooltip("Volume"),
             ));
 
         Grid::new()
@@ -1803,14 +1845,14 @@ impl Shell {
     /// album, Like. The close button and the player bar's Now playing
     /// toggle hide it; the next track start opens it again.
     /// The Now Playing sidebar: a 340px panel on the right of the
-    /// content row, shown when media starts playing. Opaque (a solid
-    /// background — the old card fill let the page show through).
-    /// Top to bottom: the current song's details, the main artist's
-    /// brief [picture, details], then the next song in the queue
-    /// with the Show full queue button (which opens the queue
-    /// overlay over the whole sidebar). The close button and the
-    /// player bar's Now playing toggle hide it; the next track start
-    /// opens it again.
+    /// content row, shown when media starts playing. Acrylic (a
+    /// translucent fill over Mica — the old solid fill hid the page
+    /// behind it entirely). Top to bottom: the current song's
+    /// details, the main artist's brief [picture, details], then
+    /// the next song in the queue with the Show full queue button
+    /// (which opens the queue overlay over the whole sidebar). The
+    /// close button and the player bar's Now playing toggle hide
+    /// it; the next track start opens it again.
     fn now_playing_sidebar(&self, context: &mut ViewContext<Self>) -> View {
         let mut rows: Vec<KeyedView> = vec![KeyedView::new(
             "header",
@@ -2118,10 +2160,11 @@ impl Shell {
             .width(340.0)
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Stretch)
-            // Opaque: a solid fill, so the page behind never bleeds
-            // through the sidebar (CardBackground is translucent
-            // over Mica).
-            .background(Brush::Theme(ThemeBrush::SolidBackground))
+            // Acrylic: a translucent fill, so the page behind shows
+            // through frosted over Mica. Reactor 0.100 has no true
+            // AcrylicBrush, so this is the closest available — the
+            // card fill, not a solid.
+            .background(Brush::Theme(ThemeBrush::CardBackground))
             .border_brush(Brush::Theme(ThemeBrush::CardStroke))
             .border_thickness(1.0)
             .content(

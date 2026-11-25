@@ -1,5 +1,4 @@
-//! Settings page: theme, stream quality, volume, autoplay, and
-//! about. Every change saves immediately to
+//! Settings page: theme, stream quality, autoplay, and about. Every change saves immediately to
 //! `%LOCALAPPDATA%\Resonance\settings.json`.
 
 use windows_reactor::*;
@@ -121,15 +120,6 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                     Message::SetQuality(QualitySetting::Low),
                     context,
                 ),
-            )),
-            StackPanel::new().spacing(8.0).children((
-                views::section_header("Volume"),
-                Slider::new()
-                    .minimum(0.0)
-                    .maximum(1.0)
-                    .value(settings.volume)
-                    .width(240.0)
-                    .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value))),
             )),
             StackPanel::new().spacing(8.0).children((
                 views::section_header("Playback"),
