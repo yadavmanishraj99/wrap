@@ -35,8 +35,7 @@ fn hit_row(
                     .symbol(Symbol::Audio)
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .vertical_alignment(VerticalAlignment::Center),
-            )
-            .into(),
+            ),
     };
 
     Grid::new()
@@ -65,7 +64,6 @@ fn hit_row(
                 .on_click(context.message(Message::PlayByKind(kind.to_string(), id.to_string())))
                 .content(SymbolIcon::new().symbol(Symbol::Play)),
         ))
-        .into()
 }
 
 fn song_subtitle(hit: &SearchHit) -> String {
@@ -79,10 +77,7 @@ fn song_subtitle(hit: &SearchHit) -> String {
 fn section(title: &str, rows: Vec<KeyedView>) -> View {
     let mut children: Vec<KeyedView> = vec![KeyedView::new("header", views::section_header(title))];
     children.extend(rows);
-    StackPanel::new()
-        .spacing(4.0)
-        .keyed_children(children)
-        .into()
+    StackPanel::new().spacing(4.0).keyed_children(children)
 }
 
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
@@ -94,16 +89,13 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         .on_suggestion_chosen(context.callback(|value: String| Message::SuggestionChosen(value)));
 
     let content: View = if shell.search_loading {
-        StackPanel::new()
-            .spacing(12.0)
-            .children((
-                ProgressRing::new().is_active(true),
-                TextBlock::new()
-                    .text("Searching...")
-                    .font_size(14.0)
-                    .opacity(0.7),
-            ))
-            .into()
+        StackPanel::new().spacing(12.0).children((
+            ProgressRing::new().is_active(true),
+            TextBlock::new()
+                .text("Searching...")
+                .font_size(14.0)
+                .opacity(0.7),
+        ))
     } else if let Some(err) = &shell.search_error {
         TextBlock::new()
             .text(format!("Search failed: {err}"))
@@ -235,10 +227,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .opacity(0.7)
                 .into()
         } else {
-            StackPanel::new()
-                .spacing(24.0)
-                .keyed_children(sections)
-                .into()
+            StackPanel::new().spacing(24.0).keyed_children(sections)
         }
     } else {
         TextBlock::new()
@@ -248,16 +237,14 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
             .into()
     };
 
-    ScrollViewer::new()
-        .content(
-            StackPanel::new().margin(24.0).spacing(16.0).children((
-                TextBlock::new()
-                    .text("Search")
-                    .font_size(28.0)
-                    .font_weight(FontWeight::BOLD),
-                search_box,
-                content,
-            )),
-        )
-        .into()
+    ScrollViewer::new().content(
+        StackPanel::new().margin(24.0).spacing(16.0).children((
+            TextBlock::new()
+                .text("Search")
+                .font_size(28.0)
+                .font_weight(FontWeight::BOLD),
+            search_box,
+            content,
+        )),
+    )
 }

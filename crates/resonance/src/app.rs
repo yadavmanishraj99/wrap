@@ -449,7 +449,6 @@ impl Component for Shell {
                 GridLength::Pixel(76.0),
             ])
             .children((title_bar, navigation, player_bar))
-            .into()
     }
 }
 
@@ -517,8 +516,7 @@ impl Shell {
                         .symbol(Symbol::Audio)
                         .horizontal_alignment(HorizontalAlignment::Center)
                         .vertical_alignment(VerticalAlignment::Center),
-                )
-                .into(),
+                ),
         };
 
         Grid::new()
@@ -597,6 +595,5 @@ impl Shell {
                     .grid_column(4)
                     .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value))),
             ))
-            .into()
     }
 }

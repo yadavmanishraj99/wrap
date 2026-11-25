@@ -26,8 +26,7 @@ fn launch_row(item: &LaunchItem, context: &mut ViewContext<Shell>) -> View {
                     .symbol(Symbol::Audio)
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .vertical_alignment(VerticalAlignment::Center),
-            )
-            .into(),
+            ),
     };
 
     Grid::new()
@@ -59,7 +58,6 @@ fn launch_row(item: &LaunchItem, context: &mut ViewContext<Shell>) -> View {
                 .on_click(context.message(Message::PlayLaunchItem(item.clone())))
                 .content(SymbolIcon::new().symbol(Symbol::Play)),
         ))
-        .into()
 }
 
 /// A section: heading + up to 6 rows.
@@ -69,59 +67,47 @@ fn section(title: &str, items: &[LaunchItem], context: &mut ViewContext<Shell>) 
     for item in items.iter().take(6) {
         rows.push(KeyedView::new(item.id.clone(), launch_row(item, context)));
     }
-    StackPanel::new().spacing(4.0).keyed_children(rows).into()
+    StackPanel::new().spacing(4.0).keyed_children(rows)
 }
 
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     let content: View = if shell.home_loading {
-        StackPanel::new()
-            .margin(24.0)
-            .spacing(12.0)
-            .children((
-                TextBlock::new()
-                    .text("Home")
-                    .font_size(28.0)
-                    .font_weight(FontWeight::BOLD),
-                ProgressRing::new().is_active(true),
-                TextBlock::new()
-                    .text("Loading trending music...")
-                    .font_size(14.0)
-                    .opacity(0.7),
-            ))
-            .into()
+        StackPanel::new().margin(24.0).spacing(12.0).children((
+            TextBlock::new()
+                .text("Home")
+                .font_size(28.0)
+                .font_weight(FontWeight::BOLD),
+            ProgressRing::new().is_active(true),
+            TextBlock::new()
+                .text("Loading trending music...")
+                .font_size(14.0)
+                .opacity(0.7),
+        ))
     } else if let Some(err) = &shell.home_error {
-        StackPanel::new()
-            .margin(24.0)
-            .spacing(12.0)
-            .children((
-                TextBlock::new()
-                    .text("Home")
-                    .font_size(28.0)
-                    .font_weight(FontWeight::BOLD),
-                TextBlock::new()
-                    .text(format!("Couldn't load Home: {err}"))
-                    .font_size(14.0)
-                    .opacity(0.7),
-                Button::new()
-                    .on_click(context.message(Message::RetryHome))
-                    .content("Retry"),
-            ))
-            .into()
+        StackPanel::new().margin(24.0).spacing(12.0).children((
+            TextBlock::new()
+                .text("Home")
+                .font_size(28.0)
+                .font_weight(FontWeight::BOLD),
+            TextBlock::new()
+                .text(format!("Couldn't load Home: {err}"))
+                .font_size(14.0)
+                .opacity(0.7),
+            Button::new()
+                .on_click(context.message(Message::RetryHome))
+                .content("Retry"),
+        ))
     } else if let Some(home) = &shell.home {
-        StackPanel::new()
-            .margin(24.0)
-            .spacing(24.0)
-            .children((
-                TextBlock::new()
-                    .text("Home")
-                    .font_size(28.0)
-                    .font_weight(FontWeight::BOLD),
-                section("Trending now", &home.new_trending, context),
-                section("Top playlists", &home.top_playlists, context),
-                section("New albums", &home.new_albums, context),
-                section("Charts", &home.charts, context),
-            ))
-            .into()
+        StackPanel::new().margin(24.0).spacing(24.0).children((
+            TextBlock::new()
+                .text("Home")
+                .font_size(28.0)
+                .font_weight(FontWeight::BOLD),
+            section("Trending now", &home.new_trending, context),
+            section("Top playlists", &home.top_playlists, context),
+            section("New albums", &home.new_albums, context),
+            section("Charts", &home.charts, context),
+        ))
     } else {
         TextBlock::new()
             .text("Nothing here yet.")
@@ -129,5 +115,5 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
             .into()
     };
 
-    ScrollViewer::new().content(content).into()
+    ScrollViewer::new().content(content)
 }

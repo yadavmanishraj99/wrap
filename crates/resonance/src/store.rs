@@ -30,17 +30,12 @@ impl Default for Theme {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum QualitySetting {
     Low,
     Medium,
+    #[default]
     High,
-}
-
-impl Default for QualitySetting {
-    fn default() -> Self {
-        Self::High
-    }
 }
 
 impl QualitySetting {

@@ -90,8 +90,7 @@ pub fn song_row(
                     .symbol(Symbol::Audio)
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .vertical_alignment(VerticalAlignment::Center),
-            )
-            .into(),
+            ),
     };
 
     Grid::new()
@@ -141,5 +140,4 @@ pub fn song_row(
                 .on_click(context.message(Message::PlaySong(queue.to_vec(), index)))
                 .content(SymbolIcon::new().symbol(Symbol::Play)),
         ))
-        .into()
 }

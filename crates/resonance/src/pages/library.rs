@@ -33,7 +33,7 @@ fn song_section(
                 )
             })
             .collect();
-        StackPanel::new().spacing(4.0).keyed_children(rows).into()
+        StackPanel::new().spacing(4.0).keyed_children(rows)
     };
     KeyedView::new(
         key,
@@ -63,7 +63,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 )
             })
             .collect();
-        StackPanel::new().spacing(4.0).keyed_children(rows).into()
+        StackPanel::new().spacing(4.0).keyed_children(rows)
     };
 
     let liked_playlists: View = if shell.library.liked_playlists.is_empty() {
@@ -84,52 +84,50 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 )
             })
             .collect();
-        StackPanel::new().spacing(4.0).keyed_children(rows).into()
+        StackPanel::new().spacing(4.0).keyed_children(rows)
     };
 
-    ScrollViewer::new()
-        .content(
-            StackPanel::new().margin(24.0).spacing(24.0).children((
-                TextBlock::new()
-                    .text("Your Library")
-                    .font_size(28.0)
-                    .font_weight(FontWeight::BOLD),
-                StackPanel::new().spacing(24.0).keyed_children(vec![
-                    song_section(
-                        "liked",
-                        "Liked songs",
-                        &shell.library.liked_songs,
-                        "No liked songs yet — tap the heart on any song.",
-                        shell,
-                        context,
-                    ),
-                    song_section(
-                        "recent",
-                        "Recently played",
-                        &shell.library.recent_songs,
-                        "Nothing played yet.",
-                        shell,
-                        context,
-                    ),
-                    KeyedView::new(
-                        "albums",
-                        StackPanel::new().spacing(4.0).keyed_children(vec![
-                            KeyedView::new("albums-header", views::section_header("Liked albums")),
-                            KeyedView::new("albums-body", liked_albums),
-                        ]),
-                    ),
-                    KeyedView::new(
-                        "playlists",
-                        StackPanel::new().spacing(4.0).keyed_children(vec![
-                            KeyedView::new(
-                                "playlists-header",
-                                views::section_header("Liked playlists"),
-                            ),
-                            KeyedView::new("playlists-body", liked_playlists),
-                        ]),
-                    ),
-                ]),
-            )),
-        )
-        .into()
+    ScrollViewer::new().content(
+        StackPanel::new().margin(24.0).spacing(24.0).children((
+            TextBlock::new()
+                .text("Your Library")
+                .font_size(28.0)
+                .font_weight(FontWeight::BOLD),
+            StackPanel::new().spacing(24.0).keyed_children(vec![
+                song_section(
+                    "liked",
+                    "Liked songs",
+                    &shell.library.liked_songs,
+                    "No liked songs yet — tap the heart on any song.",
+                    shell,
+                    context,
+                ),
+                song_section(
+                    "recent",
+                    "Recently played",
+                    &shell.library.recent_songs,
+                    "Nothing played yet.",
+                    shell,
+                    context,
+                ),
+                KeyedView::new(
+                    "albums",
+                    StackPanel::new().spacing(4.0).keyed_children(vec![
+                        KeyedView::new("albums-header", views::section_header("Liked albums")),
+                        KeyedView::new("albums-body", liked_albums),
+                    ]),
+                ),
+                KeyedView::new(
+                    "playlists",
+                    StackPanel::new().spacing(4.0).keyed_children(vec![
+                        KeyedView::new(
+                            "playlists-header",
+                            views::section_header("Liked playlists"),
+                        ),
+                        KeyedView::new("playlists-body", liked_playlists),
+                    ]),
+                ),
+            ]),
+        )),
+    )
 }
