@@ -504,12 +504,12 @@ fn nav_divider() -> KeyedView {
     )
 }
 
-/// One pinned item as a nav row: 28px art + title/subtitle, in a
-/// Border so the whole row is clickable. A pinned item is a shortcut,
-/// not a page — `selects_on_invoked(false)` so clicking it never
-/// changes the nav selection; the Border's pointer press opens/plays
-/// it instead. A pinned song plays on click; any other kind opens
-/// its details page.
+/// One pinned item as a nav row: 28px art + title only (no
+/// subtitle), in a Border so the whole row is clickable. A pinned
+/// item is a shortcut, not a page — `selects_on_invoked(false)` so
+/// clicking it never changes the nav selection; the Border's pointer
+/// press opens/plays it instead. A pinned song plays on click; any
+/// other kind opens its details page.
 fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> KeyedView {
     let item = pinned.clone();
     let message = if item.kind == "song" {
@@ -536,27 +536,13 @@ fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> Key
                     .vertical_alignment(VerticalAlignment::Center),
             ),
     };
-    let mut text_children: Vec<KeyedView> = vec![KeyedView::new(
-        "title",
-        TextBlock::new()
-            .text(item.title.clone())
-            .font_size(12.0)
-            .text_wrapping(TextWrapping::NoWrap)
-            .text_trimming(TextTrimming::CharacterEllipsis)
-            .max_lines(1),
-    )];
-    if !item.subtitle.is_empty() {
-        text_children.push(KeyedView::new(
-            "subtitle",
-            TextBlock::new()
-                .text(item.subtitle.clone())
-                .font_size(11.0)
-                .opacity(0.7)
-                .text_wrapping(TextWrapping::NoWrap)
-                .text_trimming(TextTrimming::CharacterEllipsis)
-                .max_lines(1),
-        ));
-    }
+    let title = TextBlock::new()
+        .text(item.title.clone())
+        .font_size(12.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .text_wrapping(TextWrapping::NoWrap)
+        .text_trimming(TextTrimming::CharacterEllipsis)
+        .max_lines(1);
     let row = Border::new()
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .background(Brush::Solid(Color::transparent()))
@@ -572,13 +558,7 @@ fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> Key
                 .orientation(Orientation::Horizontal)
                 .spacing(8.0)
                 .vertical_alignment(VerticalAlignment::Center)
-                .children((
-                    art,
-                    StackPanel::new()
-                        .spacing(0.0)
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .keyed_children(text_children),
-                )),
+                .children((art, title)),
         );
     KeyedView::new(
         format!("pin-{}-{}", item.kind, item.id),
@@ -1112,46 +1092,24 @@ impl Component for Shell {
 
         // Settings sits in the pane footer, at the very bottom of
         // the sidebar — not with the other navigation items. (0.100
-        // has no FooterMenuItems slot.) It is a Border, not a Button:
-        // a Button in the pane footer never answered its click, while
-        // Border pointer presses are the input path that works
-        // everywhere else in the app. Selected state is a card
-        // background fill, so it can never look selected when it
-        // isn't.
-        let settings_selected = self.page == Page::Settings;
-        let settings_footer = Border::new()
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .background(if settings_selected {
-                Brush::Theme(ThemeBrush::CardBackground)
-            } else {
-                Brush::Solid(Color::transparent())
-            })
-            .corner_radius(CornerRadius::uniform(4.0))
-            .margin(8.0)
-            .padding(Thickness::new(12.0, 8.0, 12.0, 8.0))
-            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
-                if info.is_left_button_pressed {
-                    Message::Navigate(Page::Settings)
-                } else {
-                    Message::Noop
-                }
-            }))
-            .content(
-                StackPanel::new()
-                    .orientation(Orientation::Horizontal)
-                    .spacing(12.0)
-                    .children((
-                        SymbolIcon::new().symbol(Symbol::Setting),
-                        TextBlock::new()
-                            .text("Settings")
-                            .font_size(14.0)
-                            .font_weight(if settings_selected {
-                                FontWeight::SEMI_BOLD
-                            } else {
-                                FontWeight::NORMAL
-                            }),
-                    )),
-            );
+        // has no FooterMenuItems slot.) It is a real NavigationViewItem,
+        // the same component as Home/Search/Library, so it gets the
+        // same hover, selection indicator, and icon + label layout —
+        // not a hand-built Border, which never felt like the rest.
+        // A NavigationViewItem in the PaneFooter still participates
+        // in the NavigationView's selection, so its tag routes
+        // through the same on_selected_tag_changed callback.
+        let settings_footer = NavigationViewItem::new()
+            .tag("settings")
+            .is_selected(self.page == Page::Settings)
+            .selects_on_invoked(true)
+            .slots([
+                SlotView::new(NavigationViewItemSlot::Content, "Settings".to_string()),
+                SlotView::new(
+                    NavigationViewItemSlot::Icon,
+                    SymbolIcon::new().symbol(Symbol::Setting),
+                ),
+            ]);
 
         // The nav list: Home, Search, Library, then — only while
         // pinned items exist — a divider and the pinned rows below
@@ -1187,13 +1145,13 @@ impl Component for Shell {
                     Some("home") => Message::Navigate(Page::Home),
                     Some("search") => Message::Navigate(Page::Search),
                     Some("library") => Message::Navigate(Page::Library),
+                    Some("settings") => Message::Navigate(Page::Settings),
                     // A null or unknown tag means the selection was
-                    // cleared — a drill-in page (Queue) or the Settings
-                    // footer, neither of which is a nav item — and that
-                    // is not a navigation. Mapping null to Home used to
-                    // bounce every drill-in straight back to Home the
-                    // moment it opened, so the click looked like it did
-                    // nothing.
+                    // cleared — a drill-in page (Queue), which is not
+                    // a nav item — and that is not a navigation.
+                    // Mapping null to Home used to bounce every
+                    // drill-in straight back to Home the moment it
+                    // opened, so the click looked like it did nothing.
                     _ => Message::Noop,
                 }),
             )

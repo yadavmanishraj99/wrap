@@ -86,9 +86,9 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   Songs, Albums, Artists, Playlists).
 - **Sidebar** — Home, Search, Library at the top; Settings pinned
   to the very bottom (pane footer — 0.100 has no FooterMenuItems
-  slot, so it is a Border with a pointer-press handler in the
-  PaneFooter slot; a Button there never answered its click).
-  Selected state is a card-background fill. No pane title,
+  slot, so it is a real NavigationViewItem in the PaneFooter slot,
+  the same component as the other nav items, with the same hover,
+  selection indicator, and icon + label). No pane title,
   and the title bar shows no current-page text: just the app title,
   the search field, and the theme toggle (no search icon button).
 - **Playback** — `MediaPlayer` plays saavnapi stream URLs at the
@@ -134,7 +134,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 - **Pinning** — any song, artist, album, playlist, or chart can be
   pinned from its card's context menu (Pin / Unpin). Pinned items
   appear in the sidebar below a divider after Library, in pin order,
-  each as a row with its art (28px) + title + subtitle. They persist
+  each as a row with its art (28px) + title only (no subtitle). They persist
   in `library.json`. A pinned row is a shortcut, not a page: clicking
   it never changes the nav selection. A pinned song plays on click
   (its full Song is fetched by id first); any other pinned item opens
