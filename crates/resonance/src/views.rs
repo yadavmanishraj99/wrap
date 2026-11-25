@@ -359,10 +359,12 @@ fn hover_button(
 
 /// One song row: artwork, title/artist, duration, like button.
 /// `queue` is the full list the row belongs to, so Play starts the
-/// queue at this song's position. On hover, a circular play icon
-/// appears over the art (the same hover affordance as the media
-/// cards); clicking it plays the song. There is no permanent Play
-/// button at the right end — the hover icon is the play affordance.
+/// queue at this song's position. The title and the artist line each
+/// wrap to at most 2 lines, the same rule as the media cards. On
+/// hover, a circular play icon appears over the art (the same hover
+/// affordance as the media cards); clicking it plays the song. There
+/// is no permanent Play button at the right end — the hover icon is
+/// the play affordance.
 pub fn song_row(
     song: &Song,
     queue: &[Song],
@@ -454,12 +456,14 @@ pub fn song_row(
                                 .text(song.name.clone())
                                 .font_size(14.0)
                                 .font_weight(FontWeight::SEMI_BOLD)
-                                .text_wrapping(TextWrapping::Wrap),
+                                .text_wrapping(TextWrapping::Wrap)
+                                .max_lines(2),
                             TextBlock::new()
                                 .text(artist_names(song))
                                 .font_size(12.0)
                                 .opacity(0.7)
-                                .text_wrapping(TextWrapping::Wrap),
+                                .text_wrapping(TextWrapping::Wrap)
+                                .max_lines(2),
                         )),
                     TextBlock::new()
                         .text(duration)

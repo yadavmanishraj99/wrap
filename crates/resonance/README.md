@@ -112,9 +112,10 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   the player bar's queue button was removed.
 - **Song rows** — in a details page (and the queue panel), hovering a
   song row shows a circular play icon over its 48px art; clicking it
-  plays that song in its queue. There is no permanent Play button at
-  the right end — the hover icon is the play affordance; the row
-  keeps only its Like button there.
+  plays that song in its queue. The title and the artist line each
+  wrap to at most 2 lines, the same rule as the media cards. There
+  is no permanent Play button at the right end — the hover icon is
+  the play affordance; the row keeps only its Like button there.
 - **Lyrics** — the song details page shows a song's lyrics when the
   API has them. It currently has no entry point since the player
   bar's lyrics button was removed. No connect-to-device, miniplayer,
