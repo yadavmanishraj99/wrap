@@ -12,7 +12,9 @@ use crate::views;
 
 /// Details page root.
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
-    let Some(details) = &shell.details else {
+    // The top of the details stack is what renders; the rest is
+    // history that Back walks through in reverse.
+    let Some(details) = shell.details.last() else {
         return TextBlock::new()
             .text("Nothing selected.")
             .margin(24.0)

@@ -72,6 +72,10 @@ pub struct DetailsContent {
 
 #[derive(Debug, Clone)]
 pub struct DetailsState {
+    /// A per-push sequence number: it tags the background load, so
+    /// a late reply lands on the entry it was fetched for (not on
+    /// a different entry for the same target pushed later).
+    pub seq: u64,
     pub target: DetailsTarget,
     pub loading: bool,
     pub error: Option<String>,
@@ -98,7 +102,15 @@ pub struct PropertiesState {
 
 pub struct Shell {
     pub page: Page,
-    pub details: Option<DetailsState>,
+    /// The details drill-in stack: an inner route history for the
+    /// current page. Each new details push adds an entry; Back pops
+    /// one, so Home → album → album → artist comes back in reverse
+    /// order instead of jumping straight to the page. The top entry
+    /// is what renders. Cleared when the top-level page changes,
+    /// a search starts, or the Queue page opens.
+    pub details: Vec<DetailsState>,
+    /// Next sequence number for a pushed details entry.
+    pub details_seq: u64,
     /// Page the title-bar back button returns to (Details, Queue).
     pub back_page: Page,
     /// Card id the pointer is over (its hover buttons show).
@@ -180,7 +192,7 @@ pub enum Message {
     ToggleLikePlaylist(Playlist),
     PlayByKind(String, String),
     OpenDetails(DetailsTarget),
-    DetailsLoaded(Result<DetailsContent, String>),
+    DetailsLoaded(u64, Result<DetailsContent, String>),
     CardHover(Option<String>),
     CardPressed(DetailsTarget, PointerEventInfo),
     OpenMenu(DetailsTarget, f64, f64),
@@ -369,11 +381,11 @@ async fn load_details(
 }
 
 /// Open a details page and load its content in the background.
-fn spawn_details_load(context: &ComponentContext<Shell>, target: DetailsTarget) {
+fn spawn_details_load(context: &ComponentContext<Shell>, seq: u64, target: DetailsTarget) {
     context.spawn_background(move |_| {
         let result =
             data::runtime_handle().block_on(async { load_details(&data::client(), &target).await });
-        Message::DetailsLoaded(result.map_err(|err| err.to_string()))
+        Message::DetailsLoaded(seq, result.map_err(|err| err.to_string()))
     });
 }
 
@@ -446,7 +458,8 @@ impl Component for Shell {
 
         Self {
             page: Page::Home,
-            details: None,
+            details: Vec::new(),
+            details_seq: 0,
             back_page: Page::Home,
             hovered_card: None,
             menu: None,
@@ -486,7 +499,7 @@ impl Component for Shell {
             Message::Navigate(page) => {
                 self.page = page;
                 // Switching top-level pages leaves a details drill-in.
-                self.details = None;
+                self.details.clear();
             }
             Message::TogglePane => self.pane_open = !self.pane_open,
             Message::PaneOpenChanged(open) => self.pane_open = open,
@@ -510,7 +523,7 @@ impl Component for Shell {
                 if query.len() >= 2 {
                     // Typing shows search results, not a stale
                     // details drill-in from another page.
-                    self.details = None;
+                    self.details.clear();
                     if self.page != Page::Search {
                         self.page = Page::Search;
                     }
@@ -647,7 +660,7 @@ impl Component for Shell {
                 // The queue replaces whatever is showing, details
                 // drill-in included — and the Now Playing sidebar
                 // closes, since the full queue is the queue view.
-                self.details = None;
+                self.details.clear();
                 self.page = Page::Queue;
                 self.now_playing_open = false;
                 self.queue_overlay_mounted = false;
@@ -781,8 +794,12 @@ impl Component for Shell {
             Message::OpenDetails(target) => {
                 self.open_details(context, target);
             }
-            Message::DetailsLoaded(result) => {
-                if let Some(details) = &mut self.details {
+            Message::DetailsLoaded(seq, result) => {
+                // The reply belongs to the stack entry it was
+                // fetched for (matched by sequence number). If that
+                // entry was already popped (the user went back while
+                // it loaded), the reply is dropped.
+                if let Some(details) = self.details.iter_mut().find(|d| d.seq == seq) {
                     details.loading = false;
                     match result {
                         Ok(content) => {
@@ -866,10 +883,11 @@ impl Component for Shell {
                 self.properties = None;
             }
             Message::Back => {
-                if self.details.is_some() {
-                    // Close the inner details route; stay on the
-                    // same page it was opened from.
-                    self.details = None;
+                if !self.details.is_empty() {
+                    // Pop one inner route; stay on the same page it
+                    // was opened from. The stack makes this walk
+                    // back through each details page in reverse.
+                    self.details.pop();
                 } else if self.page == Page::Queue {
                     self.page = self.back_page;
                 }
@@ -909,7 +927,7 @@ impl Component for Shell {
             Theme::System => "Theme: System",
         };
 
-        let on_drill_in = self.details.is_some() || self.page == Page::Queue;
+        let on_drill_in = !self.details.is_empty() || self.page == Page::Queue;
         let title_bar = TitleBar::new()
             .preferred_height(WindowTitleBarHeight::Tall)
             .title("Resonance")
@@ -1231,15 +1249,32 @@ impl Shell {
         // it. Changing `page` here used to deselect the sidebar
         // item, and the selection-cleared event bounced straight
         // back to Home — so the click looked like it did nothing.
+        //
+        // And it is a STACK, not one slot: every new details from
+        // inside a details page pushes a fresh entry, so Back walks
+        // back through album → album → artist in reverse order
+        // instead of dropping straight to the page. Pushing the
+        // same target that is already on top is a no-op (a
+        // double-click must not stack two identical pages).
         self.menu = None;
-        self.details = Some(DetailsState {
+        if self
+            .details
+            .last()
+            .is_some_and(|d| d.target.kind == target.kind && d.target.id == target.id)
+        {
+            return;
+        }
+        let seq = self.details_seq;
+        self.details_seq += 1;
+        self.details.push(DetailsState {
+            seq,
             target: target.clone(),
             loading: true,
             error: None,
             content: None,
         });
         self.ensure_skeleton_pulse(context);
-        spawn_details_load(context, target);
+        spawn_details_load(context, seq, target);
     }
 
     /// Open the context menu at window coordinates, clamped so the
@@ -1261,7 +1296,7 @@ impl Shell {
         self.page = Page::Search;
         // Choosing a suggestion shows results, not a stale
         // details drill-in.
-        self.details = None;
+        self.details.clear();
         self.search_loading = true;
         self.search_error = None;
         self.ensure_skeleton_pulse(context);
@@ -1275,7 +1310,7 @@ impl Shell {
     /// Shared bookkeeping after Next/Previous/auto-advance.
     /// True while any page is showing a skeleton.
     fn any_loading(&self) -> bool {
-        self.home_loading || self.search_loading || self.details.as_ref().is_some_and(|d| d.loading)
+        self.home_loading || self.search_loading || self.details.iter().any(|d| d.loading)
     }
 
     /// Start the skeleton shimmer if it isn't already running and

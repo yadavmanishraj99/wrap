@@ -21,7 +21,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     // A details drill-in is an inner route of this page: when one
     // is open it renders here, inside the page, instead of the
     // page's own content.
-    if shell.details.is_some() {
+    if !shell.details.is_empty() {
         return super::details::view(shell, context);
     }
     let search_box = AutoSuggestBox::new()
