@@ -88,9 +88,11 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   to the very bottom (pane footer). It is a real NavigationViewItem
   (same hover, selection indicator, icon + label as the other nav
   items), but a footer item never fires the NavigationView's
-  selection callback, so its icon and label are each wrapped in a
-  transparent Border with a pointer handler that navigates to
-  Settings; the selection indicator is set from the current page.
+  selection callback, so its label is wrapped in a transparent
+  Border with a pointer handler that navigates to Settings; the
+  selection indicator is set from the current page. Do NOT wrap the
+  Icon in a Border — the Icon slot expects an IconElement, and a
+  Border there crashed the app at launch (STATUS_STACK_BUFFER_OVERRUN).
   0.100 has no FooterMenuItems slot, so the PaneFooter is the only
   bottom-pinned slot. No pane title,
   and the title bar shows no current-page text: just the app title,

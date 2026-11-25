@@ -1178,45 +1178,43 @@ impl Component for Shell {
         // selection indicator, and icon + label layout. But a footer
         // item never fires the NavigationView's selection callback
         // (the footer is not part of the nav selection model), so
-        // clicking it would do nothing on its own. The Icon and the
-        // label are each wrapped in a transparent Border with a
-        // pointer handler that navigates to Settings, so the whole
-        // row (icon and label) is clickable. The selection indicator
-        // is set declaratively from the current page, so it tracks
-        // correctly even though the nav never selects this item.
+        // clicking it would do nothing on its own. The label is
+        // wrapped in a transparent Border with a pointer handler
+        // that navigates to Settings, so clicking the label (and the
+        // row around it) works. The selection indicator is set
+        // declaratively from the current page, so it tracks correctly
+        // even though the nav never selects this item.
         // (0.100 has no FooterMenuItems slot — the PaneFooter is the
         // only bottom-pinned slot.)
-        let settings_footer = {
-            let go_settings = |context: &mut ViewContext<Shell>| {
-                context.callback(move |info: PointerEventInfo| {
-                    if info.is_left_button_pressed {
-                        Message::Navigate(Page::Settings)
-                    } else {
-                        Message::Noop
-                    }
-                })
-            };
-            NavigationViewItem::new()
-                .tag("settings")
-                .is_selected(self.page == Page::Settings)
-                .selects_on_invoked(true)
-                .slots([
-                    SlotView::new(
-                        NavigationViewItemSlot::Icon,
-                        Border::new()
-                            .background(Brush::Solid(Color::transparent()))
-                            .on_pointer_pressed(go_settings(context))
-                            .content(SymbolIcon::new().symbol(Symbol::Setting)),
-                    ),
-                    SlotView::new(
-                        NavigationViewItemSlot::Content,
-                        Border::new()
-                            .background(Brush::Solid(Color::transparent()))
-                            .on_pointer_pressed(go_settings(context))
-                            .content(TextBlock::new().text("Settings").font_size(14.0)),
-                    ),
-                ])
-        };
+        //
+        // Do NOT wrap the Icon in a Border: the Icon slot expects an
+        // IconElement, and a Border there crashed the app at launch
+        // with STATUS_STACK_BUFFER_OVERRUN (0xc0000409) — the same
+        // signature as the earlier context-menu crash. The icon is a
+        // plain SymbolIcon, so only the label area is clickable.
+        let settings_footer = NavigationViewItem::new()
+            .tag("settings")
+            .is_selected(self.page == Page::Settings)
+            .selects_on_invoked(true)
+            .slots([
+                SlotView::new(
+                    NavigationViewItemSlot::Icon,
+                    SymbolIcon::new().symbol(Symbol::Setting),
+                ),
+                SlotView::new(
+                    NavigationViewItemSlot::Content,
+                    Border::new()
+                        .background(Brush::Solid(Color::transparent()))
+                        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                            if info.is_left_button_pressed {
+                                Message::Navigate(Page::Settings)
+                            } else {
+                                Message::Noop
+                            }
+                        }))
+                        .content(TextBlock::new().text("Settings").font_size(14.0)),
+                ),
+            ]);
 
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)
