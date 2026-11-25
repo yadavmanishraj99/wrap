@@ -5,5 +5,6 @@
 pub mod details;
 pub mod home;
 pub mod library;
+pub mod queue;
 pub mod search;
 pub mod settings;

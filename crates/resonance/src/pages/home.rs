@@ -58,7 +58,7 @@ fn section(title: &str, items: &[LaunchItem], context: &mut ViewContext<Shell>) 
     StackPanel::new().spacing(8.0).children((
         views::section_header(title),
         ScrollViewer::new()
-            .horizontal_scroll_bar_visibility(ScrollBarVisibility::Auto)
+            .horizontal_scroll_bar_visibility(ScrollBarVisibility::Hidden)
             .vertical_scroll_bar_visibility(ScrollBarVisibility::Disabled)
             .content(body),
     ))

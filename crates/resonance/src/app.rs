@@ -4,8 +4,9 @@
 //! WinUI design notes (Windows app design guidelines):
 //! - NavigationView in Left mode is the shell's primary navigation.
 //! - The title bar hosts the search box — the app's primary command.
-//! - The bottom player bar is a persistent 76px media bar: artwork,
-//!   track identity, transport controls, seek, volume.
+//! - The bottom player bar is a persistent 90px media bar modeled on
+//!   Spotify's Now Playing bar: track info left, controls + progress
+//!   center, extras (lyrics, queue, volume) right.
 //! - Spacing is 4/8/12/24; type ramps 12/14/20/28.
 //!
 //! windows-reactor 0.100 API notes (verified against the crate):
@@ -25,7 +26,7 @@ use windows_reactor::*;
 use crate::data;
 use crate::pages;
 use crate::player::{Player, Quality};
-use crate::store::{Library, QualitySetting, Settings, Theme};
+use crate::store::{Library, QualitySetting, RepeatMode, Settings, Theme};
 use crate::views;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,7 @@ pub enum Page {
     Library,
     Settings,
     Details,
+    Queue,
 }
 
 impl Page {
@@ -45,6 +47,7 @@ impl Page {
             Self::Library => "Your Library",
             Self::Settings => "Settings",
             Self::Details => "Details",
+            Self::Queue => "Queue",
         }
     }
 
@@ -91,7 +94,8 @@ pub struct DetailsState {
 pub struct Shell {
     pub page: Page,
     pub details: Option<DetailsState>,
-    pub details_from: Page,
+    /// Page the title-bar back button returns to (Details, Queue).
+    pub back_page: Page,
     pub pane_open: bool,
     pub search_text: String,
     pub search_suggestions: Vec<String>,
@@ -107,6 +111,10 @@ pub struct Shell {
     pub position: f64,
     pub duration: f64,
     pub playing: bool,
+    /// Volume muted from the player bar (session-only); the slider
+    /// shows 0 while muted and the pre-mute volume is restored.
+    pub muted: bool,
+    pub pre_mute_volume: f64,
 }
 
 #[derive(Clone)]
@@ -132,6 +140,10 @@ pub enum Message {
     PlayByKind(String, String),
     OpenDetails(DetailsTarget),
     DetailsLoaded(Result<DetailsContent, String>),
+    OpenQueue,
+    ToggleShuffle,
+    CycleRepeat,
+    ToggleMute,
     Back,
     SetTheme(Theme),
     SetQuality(QualitySetting),
@@ -305,7 +317,7 @@ impl Component for Shell {
         Self {
             page: Page::Home,
             details: None,
-            details_from: Page::Home,
+            back_page: Page::Home,
             pane_open: true,
             search_text: String::new(),
             search_suggestions: Vec::new(),
@@ -321,6 +333,8 @@ impl Component for Shell {
             position: 0.0,
             duration: 0.0,
             playing: false,
+            muted: false,
+            pre_mute_volume: 0.8,
         }
     }
 
@@ -407,7 +421,13 @@ impl Component for Shell {
             }
             Message::Next => {
                 let quality = Quality::from_setting(self.settings.quality);
-                self.player.next(quality);
+                // Repeat-all wraps to the start of the queue; plain
+                // Next stops at the last song.
+                if self.settings.repeat == RepeatMode::All && self.player.is_last() {
+                    self.player.play_index(0, quality);
+                } else {
+                    self.player.next(quality);
+                }
                 self.after_track_change(context);
             }
             Message::Previous => {
@@ -424,9 +444,45 @@ impl Component for Shell {
                 }
             }
             Message::VolumeChanged(volume) => {
+                // Dragging the slider un-mutes; dragging to 0 mutes.
+                self.muted = volume <= 0.0;
                 self.settings.volume = volume;
                 self.settings.save();
                 self.player.set_volume(volume);
+            }
+            Message::ToggleMute => {
+                if self.muted {
+                    self.muted = false;
+                    let volume = if self.pre_mute_volume > 0.0 {
+                        self.pre_mute_volume
+                    } else {
+                        0.8
+                    };
+                    self.settings.volume = volume;
+                    self.settings.save();
+                    self.player.set_volume(volume);
+                } else {
+                    self.pre_mute_volume = self.settings.volume;
+                    self.muted = true;
+                    self.player.set_volume(0.0);
+                }
+            }
+            Message::ToggleShuffle => {
+                self.settings.shuffle = !self.settings.shuffle;
+                self.settings.save();
+                if self.settings.shuffle {
+                    self.player.shuffle_upcoming();
+                }
+            }
+            Message::CycleRepeat => {
+                self.settings.repeat = self.settings.repeat.next();
+                self.settings.save();
+            }
+            Message::OpenQueue => {
+                if self.page != Page::Queue {
+                    self.back_page = self.page;
+                }
+                self.page = Page::Queue;
             }
             Message::SetTheme(theme) => {
                 self.settings.theme = theme;
@@ -444,15 +500,33 @@ impl Component for Shell {
                 self.position = self.player.position_secs();
                 self.duration = self.player.duration_secs();
                 self.playing = self.player.is_playing();
-                // MediaPlayer doesn't auto-advance our queue.
-                if self.playing
-                    && self.settings.autoplay
-                    && self.duration > 5.0
-                    && self.position >= self.duration - 0.3
-                {
+                // MediaPlayer doesn't auto-advance our queue. At the
+                // end of a track, repeat wins over autoplay: repeat-one
+                // restarts the song, repeat-all wraps to the start of
+                // the queue. With repeat off, autoplay decides whether
+                // the queue advances at all.
+                if self.playing && self.duration > 5.0 && self.position >= self.duration - 0.3 {
                     let quality = Quality::from_setting(self.settings.quality);
-                    self.player.next(quality);
-                    self.after_track_change(context);
+                    match self.settings.repeat {
+                        RepeatMode::One => {
+                            self.player.restart();
+                            self.after_track_change(context);
+                        }
+                        RepeatMode::All => {
+                            if self.player.is_last() {
+                                self.player.play_index(0, quality);
+                            } else {
+                                self.player.next(quality);
+                            }
+                            self.after_track_change(context);
+                        }
+                        RepeatMode::Off => {
+                            if self.settings.autoplay {
+                                self.player.next(quality);
+                                self.after_track_change(context);
+                            }
+                        }
+                    }
                 } else if self.player.has_current() {
                     spawn_tick(context);
                 }
@@ -465,7 +539,7 @@ impl Component for Shell {
             }
             Message::OpenDetails(target) => {
                 if self.page != Page::Details {
-                    self.details_from = self.page;
+                    self.back_page = self.page;
                 }
                 self.page = Page::Details;
                 self.details = Some(DetailsState {
@@ -486,7 +560,7 @@ impl Component for Shell {
                 }
             }
             Message::Back => {
-                self.page = self.details_from;
+                self.page = self.back_page;
                 self.details = None;
             }
             Message::RetryHome => {
@@ -512,13 +586,13 @@ impl Component for Shell {
             Theme::System => "Theme: System",
         };
 
-        let on_details = self.page == Page::Details;
+        let on_drill_in = self.page == Page::Details || self.page == Page::Queue;
         let title_bar = TitleBar::new()
             .preferred_height(WindowTitleBarHeight::Tall)
             .title("Resonance")
             .subtitle(self.page.title())
-            .is_back_button_visible(on_details)
-            .is_back_button_enabled(on_details)
+            .is_back_button_visible(on_drill_in)
+            .is_back_button_enabled(on_drill_in)
             .on_back_requested(context.message(Message::Back))
             .is_pane_toggle_button_visible(true)
             .on_pane_toggle_requested(context.message(Message::TogglePane))
@@ -555,6 +629,7 @@ impl Component for Shell {
             Page::Library => pages::library::view(self, context),
             Page::Settings => pages::settings::view(self, context),
             Page::Details => pages::details::view(self, context),
+            Page::Queue => pages::queue::view(self, context),
         };
 
         let navigation = NavigationView::new()
@@ -599,7 +674,7 @@ impl Component for Shell {
             .rows([
                 GridLength::Auto,
                 GridLength::Star(1.0),
-                GridLength::Pixel(76.0),
+                GridLength::Pixel(90.0),
             ])
             .children((title_bar, navigation, player_bar))
     }
@@ -637,10 +712,19 @@ impl Shell {
         }
     }
 
-    /// The persistent bottom player bar (76px): artwork, track
-    /// identity, transport controls, seek, volume.
+    /// The persistent bottom player bar (90px), modeled on Spotify's
+    /// Now Playing bar. Three zones: track info (left), controls +
+    /// progress stacked (center), extras (right).
+    ///
+    /// The play/pause button is a filled circular Border (Button has
+    /// no corner radius in windows-reactor 0.100); Border is also the
+    /// only control with pointer events, so it answers left presses.
     fn player_bar(&self, context: &mut ViewContext<Self>) -> View {
-        let (art, title, artist) = match self.player.current() {
+        let has_current = self.player.has_current();
+        let current = self.player.current().cloned();
+
+        // --- Left: 56px art, title/artist, add-to-liked button. ---
+        let (art, title, artist) = match &current {
             Some(song) => (
                 views::art_url(&song.image, "150x150"),
                 song.name.clone(),
@@ -652,7 +736,6 @@ impl Shell {
                 "Search or open Home to play a song".to_string(),
             ),
         };
-
         let art_view: View = match art {
             Some(url) => views::image_from_url(&url)
                 .width(56.0)
@@ -671,17 +754,31 @@ impl Shell {
                         .vertical_alignment(VerticalAlignment::Center),
                 ),
         };
-
-        Grid::new()
+        let liked = current
+            .as_ref()
+            .is_some_and(|song| self.library.is_liked(&song.id));
+        let like_button: View = match &current {
+            Some(song) => Button::new()
+                .grid_column(2)
+                .on_click(context.message(Message::ToggleLike(song.clone())))
+                .content(SymbolIcon::new().symbol(if liked {
+                    Symbol::Favorite
+                } else {
+                    Symbol::Add
+                })),
+            None => Button::new()
+                .grid_column(2)
+                .is_enabled(false)
+                .content(SymbolIcon::new().symbol(Symbol::Add)),
+        };
+        let left = Grid::new()
             .columns([
-                GridLength::Pixel(64.0),
+                GridLength::Pixel(56.0),
                 GridLength::Star(1.0),
                 GridLength::Auto,
-                GridLength::Star(2.0),
-                GridLength::Auto,
             ])
-            .margin(8.0)
-            .grid_row(2)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0)
             .children((
                 art_view,
                 StackPanel::new()
@@ -692,61 +789,156 @@ impl Shell {
                         TextBlock::new()
                             .text(title)
                             .font_size(14.0)
-                            .font_weight(FontWeight::SEMI_BOLD),
-                        TextBlock::new().text(artist).font_size(12.0).opacity(0.7),
+                            .font_weight(FontWeight::SEMI_BOLD)
+                            .text_trimming(TextTrimming::CharacterEllipsis),
+                        TextBlock::new()
+                            .text(artist)
+                            .font_size(12.0)
+                            .opacity(0.7)
+                            .text_trimming(TextTrimming::CharacterEllipsis),
                     )),
-                StackPanel::new()
-                    .orientation(Orientation::Horizontal)
-                    .spacing(4.0)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .grid_column(2)
-                    .children((
-                        Button::new()
-                            .on_click(context.message(Message::Previous))
-                            .is_enabled(self.player.has_current())
-                            .content(SymbolIcon::new().symbol(Symbol::Previous)),
-                        Button::new()
-                            .on_click(context.message(Message::PlayPause))
-                            .is_enabled(self.player.has_current())
-                            .content(SymbolIcon::new().symbol(if self.playing {
-                                Symbol::Pause
-                            } else {
-                                Symbol::Play
-                            })),
-                        Button::new()
-                            .on_click(context.message(Message::Next))
-                            .is_enabled(self.player.has_current())
-                            .content(SymbolIcon::new().symbol(Symbol::Next)),
-                    )),
+                like_button,
+            ));
+
+        // --- Center: controls row + progress row, stacked. ---
+        let shuffle_on = self.settings.shuffle;
+        let play_button = Border::new()
+            .width(40.0)
+            .height(40.0)
+            .corner_radius(CornerRadius::uniform(20.0))
+            .background(ThemeBrush::Accent)
+            .opacity(if has_current { 1.0 } else { 0.4 })
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if has_current && info.is_left_button_pressed {
+                    Message::PlayPause
+                } else {
+                    Message::Noop
+                }
+            }))
+            .content(
+                SymbolIcon::new()
+                    .symbol(if self.playing {
+                        Symbol::Pause
+                    } else {
+                        Symbol::Play
+                    })
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            );
+        let repeat_icon = match self.settings.repeat {
+            RepeatMode::One => Symbol::RepeatOne,
+            _ => Symbol::RepeatAll,
+        };
+        let repeat_on = self.settings.repeat != RepeatMode::Off;
+        let center = StackPanel::new()
+            .spacing(2.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .margin(16.0)
+            .grid_column(1)
+            .children((
                 StackPanel::new()
                     .orientation(Orientation::Horizontal)
                     .spacing(8.0)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .margin(16.0)
-                    .grid_column(3)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .children((
+                        Button::new()
+                            .is_enabled(has_current)
+                            .opacity(if shuffle_on { 1.0 } else { 0.5 })
+                            .on_click(context.message(Message::ToggleShuffle))
+                            .content(SymbolIcon::new().symbol(Symbol::Shuffle)),
+                        Button::new()
+                            .is_enabled(has_current)
+                            .on_click(context.message(Message::Previous))
+                            .content(SymbolIcon::new().symbol(Symbol::Previous)),
+                        play_button,
+                        Button::new()
+                            .is_enabled(has_current)
+                            .on_click(context.message(Message::Next))
+                            .content(SymbolIcon::new().symbol(Symbol::Next)),
+                        Button::new()
+                            .is_enabled(has_current)
+                            .opacity(if repeat_on { 1.0 } else { 0.5 })
+                            .on_click(context.message(Message::CycleRepeat))
+                            .content(SymbolIcon::new().symbol(repeat_icon)),
+                    )),
+                Grid::new()
+                    .columns([GridLength::Auto, GridLength::Star(1.0), GridLength::Auto])
                     .children((
                         TextBlock::new()
                             .text(views::fmt_time(self.position))
                             .font_size(12.0)
-                            .opacity(0.7),
+                            .opacity(0.7)
+                            .vertical_alignment(VerticalAlignment::Center)
+                            .grid_column(0),
                         Slider::new()
                             .minimum(0.0)
                             .maximum(self.duration.max(1.0))
                             .value(self.position.min(self.duration.max(1.0)))
+                            .grid_column(1)
                             .on_value_changed(context.callback(|value: f64| Message::Seek(value))),
                         TextBlock::new()
                             .text(views::fmt_time(self.duration))
                             .font_size(12.0)
-                            .opacity(0.7),
+                            .opacity(0.7)
+                            .vertical_alignment(VerticalAlignment::Center)
+                            .grid_column(2),
                     )),
+            ));
+
+        // --- Right: lyrics, queue, mute + volume. ---
+        let lyrics_button: View = match &current {
+            Some(song) => Button::new()
+                .on_click(context.message(Message::OpenDetails(DetailsTarget {
+                    kind: "song".to_string(),
+                    id: song.id.clone(),
+                    title: song.name.clone(),
+                    subtitle: views::artist_names(song),
+                    art: views::art_url(&song.image, "500x500"),
+                })))
+                .content(SymbolIcon::new().symbol(Symbol::MusicInfo)),
+            None => Button::new()
+                .is_enabled(false)
+                .content(SymbolIcon::new().symbol(Symbol::MusicInfo)),
+        };
+        let right = StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(4.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .margin(8.0)
+            .grid_column(2)
+            .children((
+                lyrics_button,
+                Button::new()
+                    .on_click(context.message(Message::OpenQueue))
+                    .content(SymbolIcon::new().symbol(Symbol::List)),
+                Button::new()
+                    .on_click(context.message(Message::ToggleMute))
+                    .content(SymbolIcon::new().symbol(if self.muted {
+                        Symbol::Mute
+                    } else {
+                        Symbol::Volume
+                    })),
                 Slider::new()
                     .minimum(0.0)
                     .maximum(1.0)
-                    .value(self.settings.volume)
-                    .width(120.0)
+                    .value(if self.muted {
+                        0.0
+                    } else {
+                        self.settings.volume
+                    })
+                    .width(100.0)
                     .vertical_alignment(VerticalAlignment::Center)
-                    .grid_column(4)
                     .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value))),
-            ))
+            ));
+
+        Grid::new()
+            .columns([
+                GridLength::Pixel(320.0),
+                GridLength::Star(1.0),
+                GridLength::Auto,
+            ])
+            .margin(8.0)
+            .grid_row(2)
+            .children((left, center, right))
     }
 }

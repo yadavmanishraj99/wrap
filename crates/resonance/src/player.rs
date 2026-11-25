@@ -173,6 +173,56 @@ impl Player {
         }
     }
 
+    /// Jump to `index` and start playing it (no-op out of range).
+    /// Used by repeat-all to wrap to the start of the queue.
+    pub fn play_index(&mut self, index: usize, quality: Quality) {
+        if index < self.queue.len() {
+            self.index = Some(index);
+            let _ = self.play_current(quality);
+        }
+    }
+
+    /// Restart the current song from the beginning (repeat-one).
+    pub fn restart(&self) {
+        self.seek(0.0);
+        let _ = self.play();
+    }
+
+    /// True when the current song is the last one in the queue.
+    pub fn is_last(&self) -> bool {
+        match self.index {
+            Some(i) => !self.queue.is_empty() && i + 1 >= self.queue.len(),
+            None => false,
+        }
+    }
+
+    /// Shuffle the songs after the current one, keeping the song
+    /// that's playing (and everything before it) in place. A tiny
+    /// xorshift RNG keeps this dependency-free.
+    pub fn shuffle_upcoming(&mut self) {
+        let Some(i) = self.index else {
+            return;
+        };
+        let start = i + 1;
+        if start >= self.queue.len() {
+            return;
+        }
+        let mut state = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15)
+            | 1;
+        let mut n = self.queue.len() - start;
+        while n > 1 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let j = (state % n as u64) as usize;
+            n -= 1;
+            self.queue.swap(start + n, start + j);
+        }
+    }
+
     pub fn previous(&mut self, quality: Quality) {
         if let Some(i) = self.index
             && i > 0

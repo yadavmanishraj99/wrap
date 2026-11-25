@@ -48,12 +48,37 @@ impl QualitySetting {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    All,
+    One,
+}
+
+impl RepeatMode {
+    /// Cycle off -> all -> one -> off (the repeat button's order).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::All,
+            Self::All => Self::One,
+            Self::One => Self::Off,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: Theme,
     pub quality: QualitySetting,
     pub volume: f64,
     pub autoplay: bool,
+    /// Shuffle the upcoming queue when enabled.
+    #[serde(default)]
+    pub shuffle: bool,
+    /// Repeat mode for the end of the queue.
+    #[serde(default)]
+    pub repeat: RepeatMode,
 }
 
 impl Default for Settings {
@@ -63,6 +88,8 @@ impl Default for Settings {
             quality: QualitySetting::High,
             volume: 0.8,
             autoplay: true,
+            shuffle: false,
+            repeat: RepeatMode::Off,
         }
     }
 }
