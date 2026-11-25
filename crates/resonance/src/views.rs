@@ -247,11 +247,13 @@ pub fn song_row(
                     TextBlock::new()
                         .text(song.name.clone())
                         .font_size(14.0)
-                        .font_weight(FontWeight::SEMI_BOLD),
+                        .font_weight(FontWeight::SEMI_BOLD)
+                        .text_wrapping(TextWrapping::Wrap),
                     TextBlock::new()
                         .text(artist_names(song))
                         .font_size(12.0)
-                        .opacity(0.7),
+                        .opacity(0.7)
+                        .text_wrapping(TextWrapping::Wrap),
                 )),
             TextBlock::new()
                 .text(duration)

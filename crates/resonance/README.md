@@ -38,7 +38,17 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   artist, add-to-liked button), controls + progress stacked center
   (shuffle, previous, large filled circular play/pause, next,
   repeat; elapsed / seek slider / duration below), extras right
-  (lyrics, queue, mute + volume slider).
+  (lyrics, queue, mute + volume slider). Track title and artist
+  wrap instead of clipping with an ellipsis.
+- **Search** — typing in the header search field searches whatever
+  is typed, live: one `search_all` call per keystroke feeds both the
+  autocomplete suggestions and the full results, and typing takes
+  you to the Search page. Picking a suggestion searches it too.
+- **Sidebar** — Home, Search, Library at the top; Settings pinned
+  to the very bottom (pane footer — 0.100 has no FooterMenuItems
+  slot, so it is a Button in the PaneFooter slot). No pane title,
+  and the title bar shows no current-page text: just the app title,
+  the search field, and the theme toggle (no search icon button).
 - **Playback** — `MediaPlayer` plays saavnapi stream URLs at the
   configured quality (96/160/320 kbps); queue with auto-advance;
   position polled every 500ms while a song is loaded.
@@ -73,8 +83,8 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | --- | --- |
 | Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10), scrolling horizontally (scrollbar hidden); cards are 138px, top-aligned, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties) |
 | Details | Live — opened by clicking any Home card: artwork, title, subtitle, Play, song list, lyrics for songs when available; title-bar back button returns |
-| Queue | Live — current playback queue from the player bar; playing a row starts the queue there |
-| Search | Live — AutoSuggestBox suggestions + Top result, Songs, Albums, Artists, Playlists |
+| Queue | Live — current playback queue from the player bar; playing a row starts the queue there; song titles wrap |
+| Search | Live — typing searches the typed text live (results + autocomplete from one call), Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists (persisted locally) |
 | Settings | Live — theme, window material (Mica default), stream quality, volume, autoplay, about |
 

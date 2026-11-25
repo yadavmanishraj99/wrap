@@ -40,17 +40,6 @@ pub enum Page {
 }
 
 impl Page {
-    fn title(self) -> &'static str {
-        match self {
-            Self::Home => "Home",
-            Self::Search => "Search",
-            Self::Library => "Your Library",
-            Self::Settings => "Settings",
-            Self::Details => "Details",
-            Self::Queue => "Queue",
-        }
-    }
-
     fn from_tag(tag: Option<String>) -> Self {
         match tag.as_deref() {
             Some("search") => Self::Search,
@@ -148,11 +137,9 @@ pub enum Message {
     PaneOpenChanged(bool),
     ToggleTheme,
     SearchTextChanged(String),
-    SearchSubmitted,
     SuggestionChosen(String),
-    SuggestionsLoaded(String, Vec<String>),
     HomeLoaded(Result<LaunchData, String>),
-    SearchAllLoaded(Result<SearchAll, String>),
+    SearchAllLoaded(String, Result<SearchAll, String>),
     PlaySong(Vec<Song>, usize),
     PlayPause,
     Next,
@@ -422,39 +409,33 @@ impl Component for Shell {
             }
             Message::SearchTextChanged(text) => {
                 self.search_text = text.clone();
-                // Live suggestions from the top-query section. The
-                // query rides along so a slow reply can't overwrite
-                // suggestions for newer text.
+                // Typing searches whatever is typed, live: one
+                // `search_all` call per keystroke feeds BOTH the
+                // autocomplete suggestions and the full results, so
+                // results never wait for a suggestion to be picked.
+                // The query rides along so a slow reply can't
+                // overwrite results for newer text.
                 let query = text.trim().to_string();
                 if query.len() >= 2 {
+                    if self.page != Page::Search {
+                        self.page = Page::Search;
+                    }
+                    self.search_loading = true;
+                    self.search_error = None;
                     context.spawn_background(move |_| {
-                        let titles = data::runtime_handle()
-                            .block_on(async { data::client().search_all(&query).await })
-                            .map(|all| {
-                                all.top_query
-                                    .results
-                                    .iter()
-                                    .map(|hit| hit.title.clone())
-                                    .take(8)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        Message::SuggestionsLoaded(query, titles)
+                        let result = data::runtime_handle()
+                            .block_on(async { data::client().search_all(&query).await });
+                        Message::SearchAllLoaded(query, result.map_err(|err| err.to_string()))
                     });
                 } else {
                     self.search_suggestions.clear();
-                }
-            }
-            Message::SuggestionsLoaded(query, titles) => {
-                if query == self.search_text.trim() {
-                    self.search_suggestions = titles;
+                    self.search_all = None;
+                    self.search_error = None;
+                    self.search_loading = false;
                 }
             }
             Message::SuggestionChosen(text) => {
                 self.search_text = text;
-                self.submit_search(context);
-            }
-            Message::SearchSubmitted => {
                 self.submit_search(context);
             }
             Message::HomeLoaded(result) => {
@@ -464,11 +445,22 @@ impl Component for Shell {
                     Err(err) => self.home_error = Some(err),
                 }
             }
-            Message::SearchAllLoaded(result) => {
-                self.search_loading = false;
-                match result {
-                    Ok(all) => self.search_all = Some(all),
-                    Err(err) => self.search_error = Some(err),
+            Message::SearchAllLoaded(query, result) => {
+                if query == self.search_text.trim() {
+                    self.search_loading = false;
+                    match result {
+                        Ok(all) => {
+                            self.search_suggestions = all
+                                .top_query
+                                .results
+                                .iter()
+                                .map(|hit| hit.title.clone())
+                                .take(8)
+                                .collect();
+                            self.search_all = Some(all);
+                        }
+                        Err(err) => self.search_error = Some(err),
+                    }
                 }
             }
             Message::PlaySong(queue, index) => {
@@ -729,7 +721,6 @@ impl Component for Shell {
         let title_bar = TitleBar::new()
             .preferred_height(WindowTitleBarHeight::Tall)
             .title("Resonance")
-            .subtitle(self.page.title())
             .is_back_button_visible(on_drill_in)
             .is_back_button_enabled(on_drill_in)
             .on_back_requested(context.message(Message::Back))
@@ -748,17 +739,9 @@ impl Component for Shell {
                 ),
                 SlotView::new(
                     TitleBarSlot::RightHeader,
-                    StackPanel::new()
-                        .orientation(Orientation::Horizontal)
-                        .spacing(8.0)
-                        .children((
-                            Button::new()
-                                .on_click(context.message(Message::SearchSubmitted))
-                                .content(SymbolIcon::new().symbol(Symbol::Find)),
-                            Button::new()
-                                .on_click(context.message(Message::ToggleTheme))
-                                .content(theme_label),
-                        )),
+                    Button::new()
+                        .on_click(context.message(Message::ToggleTheme))
+                        .content(theme_label),
                 ),
             ]);
 
@@ -771,13 +754,38 @@ impl Component for Shell {
             Page::Queue => pages::queue::view(self, context),
         };
 
+        // Settings sits in the pane footer, at the very bottom of
+        // the sidebar — not with the other navigation items. (0.100
+        // has no FooterMenuItems slot, so it is a Button in the
+        // PaneFooter slot; its label goes bold when selected, since
+        // Button has no background setter.)
+        let settings_footer = Button::new()
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .horizontal_content_alignment(HorizontalAlignment::Left)
+            .on_click(context.message(Message::Navigate(Page::Settings)))
+            .content(
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(12.0)
+                    .children((
+                        SymbolIcon::new().symbol(Symbol::Setting),
+                        TextBlock::new()
+                            .text("Settings")
+                            .font_size(14.0)
+                            .font_weight(if self.page == Page::Settings {
+                                FontWeight::SEMI_BOLD
+                            } else {
+                                FontWeight::NORMAL
+                            }),
+                    )),
+            );
+
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)
             .is_pane_toggle_button_visible(false)
             .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
             .is_settings_visible(false)
             .always_show_header(false)
-            .pane_title("Resonance")
             .is_pane_open(self.pane_open)
             .on_is_pane_open_changed(context.callback(Message::PaneOpenChanged))
             .on_selected_tag_changed(
@@ -796,14 +804,9 @@ impl Component for Shell {
                             Symbol::Audio,
                             self.page == Page::Library,
                         ),
-                        nav_item(
-                            "settings",
-                            "Settings",
-                            Symbol::Setting,
-                            self.page == Page::Settings,
-                        ),
                     ],
                 ),
+                SlotView::new(NavigationViewSlot::PaneFooter, settings_footer),
                 SlotView::new(NavigationViewSlot::Content, page_view),
             ]);
 
@@ -1019,7 +1022,7 @@ impl Shell {
         context.spawn_background(move |_| {
             let result =
                 data::runtime_handle().block_on(async { data::client().search_all(&query).await });
-            Message::SearchAllLoaded(result.map_err(|err| err.to_string()))
+            Message::SearchAllLoaded(query, result.map_err(|err| err.to_string()))
         });
     }
 
@@ -1114,12 +1117,12 @@ impl Shell {
                             .text(title)
                             .font_size(14.0)
                             .font_weight(FontWeight::SEMI_BOLD)
-                            .text_trimming(TextTrimming::CharacterEllipsis),
+                            .text_wrapping(TextWrapping::Wrap),
                         TextBlock::new()
                             .text(artist)
                             .font_size(12.0)
                             .opacity(0.7)
-                            .text_trimming(TextTrimming::CharacterEllipsis),
+                            .text_wrapping(TextWrapping::Wrap),
                     )),
                 like_button,
             ));

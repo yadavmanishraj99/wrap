@@ -50,7 +50,8 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
             TextBlock::new()
                 .text(now_playing)
                 .font_size(14.0)
-                .opacity(0.7),
+                .opacity(0.7)
+                .text_wrapping(TextWrapping::Wrap),
             StackPanel::new().spacing(4.0).keyed_children(rows),
         )),
     )
