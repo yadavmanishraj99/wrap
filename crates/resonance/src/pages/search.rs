@@ -154,12 +154,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .opacity(0.7)
                 .into()
         } else {
-            // Results fade in (opacity transition on the Border,
-            // driven by shell.search_fade).
-            Border::new()
-                .opacity(shell.search_fade)
-                .opacity_transition(std::time::Duration::from_millis(300))
-                .content(StackPanel::new().spacing(32.0).keyed_children(sections))
+            StackPanel::new().spacing(32.0).keyed_children(sections)
         }
     } else {
         TextBlock::new()

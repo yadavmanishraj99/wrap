@@ -442,27 +442,17 @@ pub fn song_row(
 //
 // A skeleton is a set of rounded placeholder bars in the theme's card
 // color, the same size and layout as the content that will replace
-// it. The shimmer is a pulse: the Shell flips its skeleton phase on
-// a timer (Message::SkeletonPulse) and every skeleton fill's opacity
-// follows it — the 300ms opacity transition on each fill makes the
-// change a smooth fade instead of a snap. Reactor 0.100 exposes no
-// Storyboard or ContentThemeTransition, so this timer + implicit
-// transition is the animation primitive available.
+// it. They are static — no shimmer pulse, no fade: motion is not
+// supported, so the placeholders just sit at full opacity until the
+// real content replaces them.
 // ---------------------------------------------------------------------------
-
-/// Skeleton fill opacity, bright phase of the shimmer.
-pub const SKELETON_BRIGHT: f64 = 1.0;
-/// Skeleton fill opacity, dim phase of the shimmer.
-pub const SKELETON_DIM: f64 = 0.75;
 
 /// The skeleton fill: a solid gray with real contrast against the
 /// page background in both themes. Checked with the WCAG contrast
-/// formula (page: dark #202020, light #F3F3F3; fill blended at the
-/// pulse opacity): dark #4A4A4A is 1.57:1 dim / 1.84:1 bright,
-/// light #BCBCBC is 1.48:1 dim / 1.71:1 bright. The old
-/// CardBackground fill was ~1.1:1 in both themes — nearly
-/// invisible. `Theme::System` follows the app's dark-first
-/// default.
+/// formula (page: dark #202020, light #F3F3F3): dark #4A4A4A is
+/// 1.84:1, light #BCBCBC is 1.71:1. The old CardBackground fill was
+/// ~1.1:1 in both themes — nearly invisible. `Theme::System` follows
+/// the app's dark-first default.
 pub fn skeleton_fill(theme: Theme) -> Brush {
     match theme {
         Theme::Light => Brush::Solid(Color::rgb(0xBC, 0xBC, 0xBC)),
@@ -477,8 +467,6 @@ pub fn skeleton_bar(width: f64, height: f64, shell: &Shell) -> View {
         .height(height)
         .corner_radius(CornerRadius::uniform(height / 2.0))
         .background(skeleton_fill(shell.settings.theme))
-        .opacity(shell.skeleton_opacity())
-        .opacity_transition(std::time::Duration::from_millis(300))
         .into()
 }
 
@@ -491,8 +479,6 @@ pub fn skeleton_art(size: f64, shell: &Shell) -> View {
         .height(size)
         .corner_radius(CornerRadius::uniform(4.0))
         .background(skeleton_fill(shell.settings.theme))
-        .opacity(shell.skeleton_opacity())
-        .opacity_transition(std::time::Duration::from_millis(300))
         .into()
 }
 
@@ -517,9 +503,7 @@ pub fn skeleton_row(shell: &Shell) -> View {
                 .width(48.0)
                 .height(48.0)
                 .corner_radius(CornerRadius::uniform(4.0))
-                .background(skeleton_fill(shell.settings.theme))
-                .opacity(shell.skeleton_opacity())
-                .opacity_transition(std::time::Duration::from_millis(300)),
+                .background(skeleton_fill(shell.settings.theme)),
             StackPanel::new()
                 .vertical_alignment(VerticalAlignment::Center)
                 .spacing(8.0)
@@ -556,7 +540,5 @@ pub fn skeleton_button(width: f64, height: f64, shell: &Shell) -> View {
         .height(height)
         .corner_radius(CornerRadius::uniform(4.0))
         .background(skeleton_fill(shell.settings.theme))
-        .opacity(shell.skeleton_opacity())
-        .opacity_transition(std::time::Duration::from_millis(300))
         .into()
 }

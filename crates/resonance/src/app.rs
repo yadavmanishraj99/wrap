@@ -133,31 +133,6 @@ pub struct Shell {
     /// The full-queue overlay panel (opened from the sidebar) is
     /// mounted over the sidebar.
     pub queue_overlay_mounted: bool,
-    /// The queue overlay is at full opacity/scale (the shown state;
-    /// false while it rises in or drops out).
-    pub queue_overlay_shown: bool,
-    /// Skeleton shimmer phase (true = dim). Flipped by the
-    /// SkeletonPulse timer while any page is loading.
-    pub skeleton_dim: bool,
-    /// The skeleton pulse timer is running.
-    pub skeleton_pulse_running: bool,
-    /// Fade-in opacity for just-loaded content (0 on arrival, then
-    /// animated to 1 — the content Border's opacity transition does
-    /// the fade).
-    pub home_fade: f64,
-    pub search_fade: f64,
-    pub details_fade: f64,
-    /// The page transition (navigation motion): the whole page fades
-    /// in and settles from a slight zoom on every navigation event
-    /// (page switch, drill-in, back). Fluent's page transition is a
-    /// slide + fade; Reactor 0.100 has no translate, so a subtle
-    /// scale is the closest equivalent.
-    pub page_fade: f64,
-    pub page_scale: f64,
-    /// The drill-in scale for details content: a details page zooms
-    /// in a touch deeper than a plain page switch (0.97, not 0.98),
-    /// so opening a card feels like going deeper.
-    pub details_scale: f64,
     pub pane_open: bool,
     pub search_text: String,
     /// A counter bumped on every keystroke and every suggestion
@@ -210,13 +185,6 @@ pub enum Message {
     Seek(f64),
     VolumeChanged(f64),
     Tick,
-    SkeletonPulse,
-    HomeFadeIn,
-    SearchFadeIn,
-    DetailsFadeIn,
-    /// The page transition finished its 30ms settle: the page is
-    /// fully visible at full size.
-    PageFadeIn,
     ToggleLike(Song),
     ToggleLikeAlbum(Album),
     ToggleLikePlaylist(Playlist),
@@ -240,9 +208,7 @@ pub enum Message {
     Smtc(SmtcCommand),
     ArtistBriefLoaded(String, Result<Artist, String>),
     OpenQueueOverlay,
-    QueueOverlayShown,
     CloseQueueOverlay,
-    QueueOverlayHidden,
     ToggleShuffle,
     CycleRepeat,
     ToggleMute,
@@ -440,26 +406,6 @@ fn spawn_tick(context: &ComponentContext<Shell>) {
     });
 }
 
-/// One shimmer step: sleeps, then flips the skeleton phase. The
-/// SkeletonPulse handler re-spawns this while anything is loading.
-fn spawn_skeleton_pulse(context: &ComponentContext<Shell>) {
-    context.spawn_background(move |_| {
-        std::thread::sleep(Duration::from_millis(650));
-        Message::SkeletonPulse
-    });
-}
-
-/// A beat after content arrives, raise its fade to 1 so the page
-/// Border's opacity transition animates the fade-in. The short sleep
-/// lets the opacity-0 frame actually paint first, so the transition
-/// sees a real change.
-fn spawn_fade_in(context: &ComponentContext<Shell>, message: Message) {
-    context.spawn_background(move |_| {
-        std::thread::sleep(Duration::from_millis(30));
-        message
-    });
-}
-
 /// Wait ~300ms after the last keystroke, then fire the search — a
 /// burst of typing sends one `search_all`, not one per keystroke.
 /// The seq lets the handler drop a timer a newer keystroke
@@ -535,10 +481,8 @@ impl Component for Shell {
             .take_smtc_receiver()
             .map(|rx| Arc::new(Mutex::new(rx)));
 
-        // Home data loads in the background as the shell opens, so
-        // the skeleton shimmer starts with it.
+        // Home data loads in the background as the shell opens.
         spawn_home_load(context);
-        spawn_skeleton_pulse(context);
 
         let shell = Self {
             page: Page::Home,
@@ -552,15 +496,6 @@ impl Component for Shell {
             now_playing_artist: None,
             now_playing_artist_song_id: None,
             queue_overlay_mounted: false,
-            queue_overlay_shown: false,
-            skeleton_dim: false,
-            skeleton_pulse_running: true,
-            home_fade: 1.0,
-            search_fade: 1.0,
-            details_fade: 1.0,
-            page_fade: 1.0,
-            page_scale: 1.0,
-            details_scale: 1.0,
             pane_open: true,
             search_text: String::new(),
             search_debounce_seq: 0,
@@ -589,13 +524,9 @@ impl Component for Shell {
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
         match message {
             Message::Navigate(page) => {
-                let changed = self.page != page;
                 self.page = page;
                 // Switching top-level pages leaves a details drill-in.
                 self.details.clear();
-                if changed {
-                    self.start_page_transition(context);
-                }
             }
             Message::TogglePane => self.pane_open = !self.pane_open,
             Message::PaneOpenChanged(open) => self.pane_open = open,
@@ -622,11 +553,9 @@ impl Component for Shell {
                     self.details.clear();
                     if self.page != Page::Search {
                         self.page = Page::Search;
-                        self.start_page_transition(context);
                     }
                     self.search_loading = true;
                     self.search_error = None;
-                    self.ensure_skeleton_pulse(context);
                     // Debounced: the search only fires once typing
                     // has paused for ~300ms, so a burst sends one
                     // call instead of one per keystroke. The seq
@@ -664,11 +593,6 @@ impl Component for Shell {
                 match result {
                     Ok(data) => {
                         self.home = Some(data);
-                        // Content arrives invisible and fades in (the
-                        // page Border's opacity transition animates
-                        // the 0 -> 1 change a beat later).
-                        self.home_fade = 0.0;
-                        spawn_fade_in(context, Message::HomeFadeIn);
                     }
                     Err(err) => self.home_error = Some(err),
                 }
@@ -686,8 +610,6 @@ impl Component for Shell {
                                 .take(8)
                                 .collect();
                             self.search_all = Some(all);
-                            self.search_fade = 0.0;
-                            spawn_fade_in(context, Message::SearchFadeIn);
                         }
                         Err(err) => self.search_error = Some(err),
                     }
@@ -795,7 +717,6 @@ impl Component for Shell {
                     // The overlay lives over the sidebar; hiding the
                     // sidebar hides it too.
                     self.queue_overlay_mounted = false;
-                    self.queue_overlay_shown = false;
                 }
             }
             Message::ArtistBriefLoaded(song_id, result) => {
@@ -810,26 +731,9 @@ impl Component for Shell {
                 }
             }
             Message::OpenQueueOverlay => {
-                // Mount the panel hidden (opacity 0, scale 0.96),
-                // then a beat later raise it — the Border's
-                // transitions animate the rise.
                 self.queue_overlay_mounted = true;
-                self.queue_overlay_shown = false;
-                spawn_fade_in(context, Message::QueueOverlayShown);
-            }
-            Message::QueueOverlayShown => {
-                self.queue_overlay_shown = true;
             }
             Message::CloseQueueOverlay => {
-                // Animate down (opacity 0, scale 0.96), then
-                // unmount once the 300ms transition has run.
-                self.queue_overlay_shown = false;
-                context.spawn_background(move |_| {
-                    std::thread::sleep(Duration::from_millis(300));
-                    Message::QueueOverlayHidden
-                });
-            }
-            Message::QueueOverlayHidden => {
                 self.queue_overlay_mounted = false;
             }
             Message::SetTheme(theme) => {
@@ -888,30 +792,6 @@ impl Component for Shell {
                 // stops and no play/pause handler runs.
                 self.player.sync_smtc_status();
             }
-            Message::SkeletonPulse => {
-                // Flip the shimmer phase; keep the loop going only
-                // while a skeleton is still on screen.
-                self.skeleton_dim = !self.skeleton_dim;
-                if self.any_loading() {
-                    spawn_skeleton_pulse(context);
-                } else {
-                    self.skeleton_pulse_running = false;
-                }
-            }
-            Message::HomeFadeIn => {
-                self.home_fade = 1.0;
-            }
-            Message::SearchFadeIn => {
-                self.search_fade = 1.0;
-            }
-            Message::DetailsFadeIn => {
-                self.details_fade = 1.0;
-                self.details_scale = 1.0;
-            }
-            Message::PageFadeIn => {
-                self.page_fade = 1.0;
-                self.page_scale = 1.0;
-            }
             Message::ToggleLike(song) => {
                 self.library.toggle_like(song);
             }
@@ -937,9 +817,6 @@ impl Component for Shell {
                     match result {
                         Ok(content) => {
                             details.content = Some(content);
-                            self.details_fade = 0.0;
-                            self.details_scale = 0.97;
-                            spawn_fade_in(context, Message::DetailsFadeIn);
                         }
                         Err(err) => details.error = Some(err),
                     }
@@ -1022,26 +899,13 @@ impl Component for Shell {
                     // was opened from. The stack makes this walk
                     // back through each details page in reverse.
                     self.details.pop();
-                    if !self.details.is_empty() {
-                        // Another details page is now on top — it
-                        // fades + zooms in, the same drill-in motion
-                        // as opening one.
-                        self.details_fade = 0.0;
-                        self.details_scale = 0.97;
-                        spawn_fade_in(context, Message::DetailsFadeIn);
-                    } else {
-                        // Back to the page itself.
-                        self.start_page_transition(context);
-                    }
                 } else if self.page == Page::Queue {
                     self.page = self.back_page;
-                    self.start_page_transition(context);
                 }
             }
             Message::RetryHome => {
                 self.home_loading = true;
                 self.home_error = None;
-                self.ensure_skeleton_pulse(context);
                 spawn_home_load(context);
             }
             Message::Noop => {}
@@ -1108,21 +972,6 @@ impl Component for Shell {
             Page::Settings => pages::settings::view(self, context),
             Page::Queue => pages::queue::view(self, context),
         };
-        // Navigation motion: the whole page fades in and settles
-        // from a slight zoom on every navigation event (driven by
-        // shell.page_fade / page_scale, reset by
-        // start_page_transition). Fluent's page transition is a
-        // slide + fade; Reactor 0.100 has no translate, so this
-        // fade + 0.98 zoom is the closest equivalent. The Border
-        // stretches to fill the NavigationView content area.
-        let page_view: View = Border::new()
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Stretch)
-            .opacity(self.page_fade)
-            .opacity_transition(std::time::Duration::from_millis(200))
-            .scale(self.page_scale)
-            .scale_transition(std::time::Duration::from_millis(200))
-            .content(page_view);
 
         // Settings sits in the pane footer, at the very bottom of
         // the sidebar — not with the other navigation items. (0.100
@@ -1446,11 +1295,6 @@ impl Shell {
             error: None,
             content: None,
         });
-        self.ensure_skeleton_pulse(context);
-        // Drilling in moves too: the page (now showing the details
-        // skeleton) fades + zooms in, and the loaded content follows
-        // with its own deeper zoom when it arrives.
-        self.start_page_transition(context);
         spawn_details_load(context, seq, target);
     }
 
@@ -1491,37 +1335,11 @@ impl Shell {
         self.details.clear();
         self.search_loading = true;
         self.search_error = None;
-        self.ensure_skeleton_pulse(context);
         context.spawn_background(move |_| {
             let result =
                 data::runtime_handle().block_on(async { data::client().search_all(&query).await });
             Message::SearchAllLoaded(query, result.map_err(|err| err.to_string()))
         });
-    }
-
-    /// Shared bookkeeping after Next/Previous/auto-advance.
-    /// True while any page is showing a skeleton.
-    fn any_loading(&self) -> bool {
-        self.home_loading || self.search_loading || self.details.iter().any(|d| d.loading)
-    }
-
-    /// Start the skeleton shimmer if it isn't already running and
-    /// something is loading. Several load sites share the one loop;
-    /// it stops itself when nothing is loading.
-    fn ensure_skeleton_pulse(&mut self, context: &ComponentContext<Self>) {
-        if !self.skeleton_pulse_running && self.any_loading() {
-            self.skeleton_pulse_running = true;
-            spawn_skeleton_pulse(context);
-        }
-    }
-
-    /// The skeleton fills' current opacity (the shimmer phase).
-    pub fn skeleton_opacity(&self) -> f64 {
-        if self.skeleton_dim {
-            views::SKELETON_DIM
-        } else {
-            views::SKELETON_BRIGHT
-        }
     }
 
     /// Listen for one OS media-session button press: block on the
@@ -1549,12 +1367,6 @@ impl Shell {
     /// cutting. The 30ms settle lets the new page mount invisible
     /// before the transition runs (the same pattern as the
     /// per-page fades).
-    fn start_page_transition(&mut self, context: &ComponentContext<Self>) {
-        self.page_fade = 0.0;
-        self.page_scale = 0.98;
-        spawn_fade_in(context, Message::PageFadeIn);
-    }
-
     fn after_track_change(&mut self, context: &ComponentContext<Self>) {
         if let Some(song) = self.player.current() {
             self.library.push_recent(song.clone());
@@ -2243,10 +2055,6 @@ impl Shell {
             .background(Brush::Theme(ThemeBrush::SolidBackground))
             .border_brush(Brush::Theme(ThemeBrush::CardStroke))
             .border_thickness(1.0)
-            .opacity(if self.queue_overlay_shown { 1.0 } else { 0.0 })
-            .opacity_transition(std::time::Duration::from_millis(300))
-            .scale(if self.queue_overlay_shown { 1.0 } else { 0.96 })
-            .scale_transition(std::time::Duration::from_millis(300))
             .content(
                 Grid::new()
                     .margin(16.0)

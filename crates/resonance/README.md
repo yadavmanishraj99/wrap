@@ -60,8 +60,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   then it may still show "Unknown app" even with the track info
   correct.
 - **Skeleton loading** — Home, Search and Details show skeleton
-  placeholders while they load, then the loaded content fades in.
-  The skeleton is built from each page's own layout, not a generic
+  placeholders while they load. The skeleton is built from each page's own layout, not a generic
   stack of bars: Home shows its four real sections (Trending now,
   Top playlists, New albums, Charts) with their headings and a row
   of skeleton cards each; Search shows its five result sections
@@ -72,22 +71,13 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   for an artist; Songs for an album/playlist/chart; Lyrics for a
   song). The fill is a solid gray with real contrast against the
   page background in both themes (checked with the WCAG formula:
-  dark `#4A4A4A` (1.57:1 dim / 1.84:1 bright), light `#BCBCBC`
-  (1.48:1 dim / 1.71:1 bright); the shimmer pulse runs 0.75–1.0
-  so even the dim phase stays visible).
-- **Navigation motion** — every navigation event moves instead
-  of cutting: page switches (nav, Settings footer, search typing,
-  queue) fade in and settle from a slight zoom (200ms, 0.98→1.0);
-  drilling into a details page zooms a touch deeper (300ms,
-  0.97→1.0) so it feels like going deeper, and going Back replays
-  the same motion on the page it reveals. Fluent's real page
-  transition is a slide + fade, but windows-reactor 0.100 has no
-  translate, so fade + zoom is the closest equivalent — no
-  Connected Animations or Composition animations are available
-  through Reactor either. The queue overlay already had its own
-  fade + scale; the Now Playing sidebar still appears instantly
-  (a panel, not a navigation event).
-  is typed: the search is debounced ~300ms, so a burst of typing
+  dark `#4A4A4A` (1.84:1), light `#BCBCBC` (1.71:1)). The
+  skeletons are static — no shimmer pulse, no fade: motion is not
+  supported, so the placeholders just sit at full opacity until the
+  real content replaces them. Navigation is instant too — no page
+  transition, no drill-in zoom, no overlay fade (the queue overlay
+  and the Now Playing sidebar appear at once).
+- **Search** — typing searches the typed text live: the search is debounced ~300ms, so a burst of typing
   sends one `search_all` call (not one per keystroke) once typing
   pauses, and that one call feeds both the autocomplete
   suggestions and the full results; typing takes you to the Search
@@ -154,7 +144,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties). Cards with no art show a placeholder tile (music-note icon on a solid fill). Clicking a song card plays it; any other card opens its page |
 | Details | Live — one page per kind, each with its own layout: Artist (circular art, followers, Play, Top songs, Top albums, Similar artists), Album (art, clickable artist names, year • songs, Play, Like), Playlist / Chart (art, description, Play, Like), Song (art, clickable artists, Play, Like, lyrics when available); title-bar back button returns. Song cards never open this page — they just play. Details are an inner-route stack: opening a details page from inside another details page pushes a new entry, and Back walks back through each one in reverse order (Home → album → album → artist → back → back → back → Home), instead of dropping straight to the page |
 | Queue | Live — the queue panel over the Now Playing sidebar (from its Show full queue button); playing a row starts the queue there; song titles wrap |
-| Now Playing | Live — an opaque 340px sidebar on the right (a solid fill, so the page never bleeds through it). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which rises in and drops out with a fade + slight scale; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |
+| Now Playing | Live — an opaque 340px sidebar on the right (a solid fill, so the page never bleeds through it). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which appears at once; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |
 | Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists (persisted locally), all as Home-style media-card sections; albums and playlists land here via the Like button on their pages |
 | Settings | Live — theme, window material (Acrylic default), stream quality, autoplay, about |

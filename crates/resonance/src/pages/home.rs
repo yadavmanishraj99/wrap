@@ -64,33 +64,21 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .content("Retry"),
         ))
     } else if let Some(home) = &shell.home {
-        // Loaded content fades in (opacity transition on the Border,
-        // driven by shell.home_fade: 0 on arrival, 1 a beat later).
-        Border::new()
-            .opacity(shell.home_fade)
-            .opacity_transition(std::time::Duration::from_millis(300))
-            .content(
-                StackPanel::new().margin(24.0).spacing(32.0).children((
-                    TextBlock::new()
-                        .text("Home")
-                        .font_size(28.0)
-                        .font_weight(FontWeight::BOLD),
-                    views::card_section(
-                        "Trending now",
-                        &targets(&home.new_trending),
-                        shell,
-                        context,
-                    ),
-                    views::card_section(
-                        "Top playlists",
-                        &targets(&home.top_playlists),
-                        shell,
-                        context,
-                    ),
-                    views::card_section("New albums", &targets(&home.new_albums), shell, context),
-                    views::card_section("Charts", &targets(&home.charts), shell, context),
-                )),
-            )
+        StackPanel::new().margin(24.0).spacing(32.0).children((
+            TextBlock::new()
+                .text("Home")
+                .font_size(28.0)
+                .font_weight(FontWeight::BOLD),
+            views::card_section("Trending now", &targets(&home.new_trending), shell, context),
+            views::card_section(
+                "Top playlists",
+                &targets(&home.top_playlists),
+                shell,
+                context,
+            ),
+            views::card_section("New albums", &targets(&home.new_albums), shell, context),
+            views::card_section("Charts", &targets(&home.charts), shell, context),
+        ))
     } else {
         TextBlock::new()
             .text("Nothing here yet.")
