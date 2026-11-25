@@ -1864,11 +1864,8 @@ impl Shell {
     /// The Now Playing sidebar: a 340px panel on the right of the
     /// content row. It only opens and closes from the player bar's
     /// Now playing button (ToggleNowPlaying) — a track starting
-    /// never opens it on its own. Frosted glass: the window
-    /// backdrop is Acrylic by default, and this panel's translucent
-    /// fill lets that blur show through (Reactor 0.100 has no
-    /// AcrylicBrush for a single panel, so the window material is
-    /// what makes it frosted; Mica Alt is the fallback in Settings).
+    /// never opens it on its own. Opaque: a solid fill, so the page
+    /// behind never bleeds through the sidebar.
     /// Top to bottom: the current song's details, the main artist's
     /// brief [picture, details], then the next song in the queue
     /// with the Show full queue button (which opens the queue
@@ -2182,11 +2179,9 @@ impl Shell {
             .width(340.0)
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Stretch)
-            // Acrylic: a translucent fill, so the page behind shows
-            // through frosted over Mica. Reactor 0.100 has no true
-            // AcrylicBrush, so this is the closest available — the
-            // card fill, not a solid.
-            .background(Brush::Theme(ThemeBrush::CardBackground))
+            // Opaque: a solid fill, so the page behind never bleeds
+            // through the sidebar.
+            .background(Brush::Theme(ThemeBrush::SolidBackground))
             .border_brush(Brush::Theme(ThemeBrush::CardStroke))
             .border_thickness(1.0)
             .content(
