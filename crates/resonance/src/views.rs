@@ -366,6 +366,71 @@ fn hover_button(
         .content(SymbolIcon::new().symbol(icon))
 }
 
+/// A small circular like button: Add (plus) when not liked,
+/// Favorite (heart) when liked. The circle is 24px; the icon inside
+/// is ~16px. The icon is greyish when the pointer is not over it
+/// (low opacity) and goes to full contrast on hover, and the circle
+/// gains a card fill on hover. The icon uses the theme's foreground
+/// color, dimmed by opacity, so it reads as grey in both dark mode
+/// (white dimmed over the dark page) and light mode (black dimmed
+/// over the light page) — no hardcoded grey that would vanish on
+/// one theme. `None` renders an inert greyed-out Add (no song to
+/// like yet).
+pub fn like_button(
+    song: Option<&Song>,
+    grid_column: i32,
+    shell: &Shell,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    let (liked, id) = match song {
+        Some(song) => (shell.library.is_liked(&song.id), Some(song.id.clone())),
+        None => (false, None),
+    };
+    let hovered = id
+        .as_deref()
+        .is_some_and(|id| shell.hovered_like.as_deref() == Some(id));
+    let mut border = Border::new()
+        .width(24.0)
+        .height(24.0)
+        .corner_radius(CornerRadius::uniform(12.0))
+        .background(if hovered {
+            Brush::Theme(ThemeBrush::CardBackground)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .opacity(if hovered { 1.0 } else { 0.55 })
+        .margin(4.0)
+        .grid_column(grid_column);
+    if let Some(song) = song {
+        let hover_id = song.id.clone();
+        let press_song = song.clone();
+        border = border
+            .on_pointer_entered(context.callback(move |_info: PointerEventInfo| {
+                Message::LikeHover(Some(hover_id.clone()))
+            }))
+            .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::LikeHover(None)))
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if info.is_left_button_pressed {
+                    Message::ToggleLike(press_song.clone())
+                } else {
+                    Message::Noop
+                }
+            }));
+    }
+    border
+        .content(
+            SymbolIcon::new()
+                .symbol(if liked { Symbol::Favorite } else { Symbol::Add })
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip(if liked {
+            "Remove from liked songs"
+        } else {
+            "Add to liked songs"
+        })
+}
+
 /// One song row: artwork, title/artist, and — unless `compact` —
 /// a favorite button and the duration. `queue` is the full list the
 /// row belongs to, so Play starts the queue at this song's position.
@@ -389,7 +454,6 @@ pub fn song_row(
     context: &mut ViewContext<Shell>,
 ) -> View {
     let index = queue.iter().position(|s| s.id == song.id).unwrap_or(0);
-    let liked = shell.library.is_liked(&song.id);
     let duration = song
         .duration
         .map(|d| fmt_time(d as f64))
@@ -481,15 +545,7 @@ pub fn song_row(
         if hovered {
             children.push(KeyedView::new(
                 "favorite",
-                Button::new()
-                    .margin(Thickness::new(4.0, 4.0, 8.0, 4.0))
-                    .grid_column(2)
-                    .on_click(context.message(Message::ToggleLike(song.clone())))
-                    .content(SymbolIcon::new().symbol(if liked {
-                        Symbol::Favorite
-                    } else {
-                        Symbol::Add
-                    })),
+                like_button(Some(song), 2, shell, context),
             ));
         }
         children.push(KeyedView::new(

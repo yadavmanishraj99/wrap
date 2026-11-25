@@ -117,6 +117,9 @@ pub struct Shell {
     pub back_page: Page,
     /// Card id the pointer is over (its hover buttons show).
     pub hovered_card: Option<String>,
+    /// Song id whose like button the pointer is over (its icon goes
+    /// to full contrast; otherwise it is greyish).
+    pub hovered_like: Option<String>,
     /// Open context menu, if any.
     pub menu: Option<MenuState>,
     /// Open Properties dialog, if any.
@@ -192,6 +195,7 @@ pub enum Message {
     OpenDetails(DetailsTarget),
     DetailsLoaded(u64, Result<DetailsContent, String>),
     CardHover(Option<String>),
+    LikeHover(Option<String>),
     CardPressed(DetailsTarget, PointerEventInfo),
     OpenMenu(DetailsTarget, f64, f64),
     CloseOverlay,
@@ -653,6 +657,7 @@ impl Component for Shell {
             details_seq: 0,
             back_page: Page::Home,
             hovered_card: None,
+            hovered_like: None,
             menu: None,
             properties: None,
             now_playing_open: false,
@@ -987,6 +992,9 @@ impl Component for Shell {
             }
             Message::CardHover(id) => {
                 self.hovered_card = id;
+            }
+            Message::LikeHover(id) => {
+                self.hovered_like = id;
             }
             Message::CardPressed(target, info) => {
                 if info.is_right_button_pressed {
@@ -1656,29 +1664,7 @@ impl Shell {
                         .vertical_alignment(VerticalAlignment::Center),
                 ),
         };
-        let liked = current
-            .as_ref()
-            .is_some_and(|song| self.library.is_liked(&song.id));
-        let like_button: View = match &current {
-            Some(song) => Button::new()
-                .grid_column(2)
-                .on_click(context.message(Message::ToggleLike(song.clone())))
-                .content(SymbolIcon::new().symbol(if liked {
-                    Symbol::Favorite
-                } else {
-                    Symbol::Add
-                }))
-                .tooltip(if liked {
-                    "Remove from liked songs"
-                } else {
-                    "Add to liked songs"
-                }),
-            None => Button::new()
-                .grid_column(2)
-                .is_enabled(false)
-                .content(SymbolIcon::new().symbol(Symbol::Add))
-                .tooltip("Add to liked songs"),
-        };
+        let like_button: View = views::like_button(current.as_ref(), 2, self, context);
         let left = Grid::new()
             .columns([
                 GridLength::Pixel(56.0),

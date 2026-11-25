@@ -36,7 +36,9 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 - **Bottom player bar** — 96px persistent bar modeled on Spotify's
   Now Playing bar, three zones: track info left (56px art, title on
   one line with an ellipsis, up to two lines of clickable artist
-  names — each opens that artist's page — add-to-liked button),
+  names — each opens that artist's page — a small circular
+  add-to-liked button, 24px circle with a ~16px icon, greyish until
+  hovered),
   controls + progress stacked center (shuffle, previous, large
   filled circular play/pause, next, repeat — the four around the
   play button are borderless icon buttons; every button in the bar
@@ -120,7 +122,10 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   There is no permanent Play button — the hover icon is the play
   affordance. In the Now Playing queue, the row is compact: no
   favorite button and no duration, just art, title/artist, and the
-  hover background.
+  hover background. The favorite/like button (player bar and song
+  rows) is a small 24px circle with a ~16px icon: greyish when the
+  pointer is not over it, full contrast plus a card fill on hover,
+  in both dark and light mode.
 - **Lyrics** — the song details page shows a song's lyrics when the
   API has them. It currently has no entry point since the player
   bar's lyrics button was removed. No connect-to-device, miniplayer,
