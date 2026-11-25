@@ -1,6 +1,6 @@
 //! Library page: liked songs, recently played, liked albums, liked
-//! playlists and liked artists, persisted locally in
-//! `%LOCALAPPDATA%\Resonance\library.json`. Every section is a
+//! playlists and liked artists, all read from the SQLite catalog.
+//! Every section is a
 //! Home-style row of media cards — song cards play, album, playlist
 //! and artist cards open their pages. Albums, playlists and artists
 //! land here via the Like button on their pages.
@@ -100,21 +100,21 @@ fn artist_targets(artists: &[Artist]) -> Vec<DetailsTarget> {
 
 /// The auto "Downloads" playlist: individually downloaded songs
 /// (a collection download stays with its album / playlist). The
-/// art prefers the locally cached image, so it shows offline.
+/// art prefers the locally cached cover, so it shows offline.
 fn download_targets(shell: &Shell) -> Vec<DetailsTarget> {
     shell
-        .downloads
+        .catalog
         .downloaded_songs()
         .into_iter()
         .map(|item| DetailsTarget {
             kind: "song".to_string(),
-            id: item.song_id.clone(),
+            id: item.id.clone(),
             title: item.title.clone(),
             subtitle: item.artist.clone(),
-            art: match &item.local_image {
-                Some(path) => Some(crate::download::file_uri(std::path::Path::new(path))),
-                None => item.art.clone(),
-            },
+            art: shell
+                .catalog
+                .cover_uri(&item.cover_id)
+                .or_else(|| item.art.clone()),
         })
         .collect()
 }
@@ -123,15 +123,25 @@ fn download_targets(shell: &Shell) -> Vec<DetailsTarget> {
 /// artist's top songs, under the artist's name.
 fn downloaded_artist_targets(shell: &Shell) -> Vec<DetailsTarget> {
     shell
-        .downloads
+        .catalog
         .downloaded_artists()
         .into_iter()
         .map(|collection| DetailsTarget {
             kind: "artist".to_string(),
             id: collection.id.clone(),
             title: collection.title.clone(),
-            subtitle: format!("{} songs", collection.total_items),
-            art: collection.art.clone(),
+            subtitle: format!(
+                "{} songs",
+                shell
+                    .catalog
+                    .collection_progress(&collection.id)
+                    .map(|(_, total)| total)
+                    .unwrap_or(0)
+            ),
+            art: shell
+                .catalog
+                .cover_uri(&collection.cover_id)
+                .or_else(|| collection.art.clone()),
         })
         .collect()
 }
@@ -169,7 +179,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 card_section_or_empty(
                     "liked",
                     "Liked songs",
-                    &song_targets(&shell.library.liked_songs),
+                    &song_targets(&shell.catalog.liked_songs()),
                     "No liked songs yet — tap the heart on any song.",
                     shell,
                     context,
@@ -177,7 +187,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 card_section_or_empty(
                     "recent",
                     "Recently played",
-                    &song_targets(&shell.library.recent_songs),
+                    &song_targets(&shell.catalog.recent_songs()),
                     "Nothing played yet.",
                     shell,
                     context,
@@ -185,7 +195,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 card_section_or_empty(
                     "albums",
                     "Liked albums",
-                    &album_targets(&shell.library.liked_albums),
+                    &album_targets(&shell.catalog.liked_albums()),
                     "No liked albums yet — tap Like on any album page.",
                     shell,
                     context,
@@ -193,7 +203,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 card_section_or_empty(
                     "playlists",
                     "Liked playlists",
-                    &playlist_targets(&shell.library.liked_playlists),
+                    &playlist_targets(&shell.catalog.liked_playlists()),
                     "No liked playlists yet — tap Like on any playlist page.",
                     shell,
                     context,
@@ -201,7 +211,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 card_section_or_empty(
                     "artists",
                     "Liked artists",
-                    &artist_targets(&shell.library.liked_artists),
+                    &artist_targets(&shell.catalog.liked_artists()),
                     "No liked artists yet — tap Like on any artist page.",
                     shell,
                     context,

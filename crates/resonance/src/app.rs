@@ -25,11 +25,11 @@ use std::time::Duration;
 use saavnapi::{Album, Artist, ArtistArgs, LaunchData, Playlist, SearchAll, Song};
 use windows_reactor::*;
 
+use crate::catalog::{self, Catalog, DownloadEvent};
 use crate::data;
-use crate::download::{self, DownloadEvent, DownloadManager, DownloadStatus};
 use crate::pages;
 use crate::player::{Player, Quality, SmtcCommand};
-use crate::store::{Library, Material, PinnedItem, QualitySetting, RepeatMode, Settings, Theme};
+use crate::store::{Material, PinnedItem, QualitySetting, RepeatMode, Settings, Theme};
 use crate::views;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +150,9 @@ pub struct Shell {
     pub search_all: Option<SearchAll>,
     pub search_loading: bool,
     pub search_error: Option<String>,
-    pub library: Library,
+    /// The catalog: every song / collection the app knows about
+    /// (liked, pinned, recent, downloaded), persisted in SQLite.
+    pub catalog: Catalog,
     pub settings: Settings,
     pub player: Player,
     /// The SMTC button channel's receiving end, shared with the
@@ -164,9 +166,6 @@ pub struct Shell {
     /// Volume muted from the player bar (session-only); the volume
     /// flyout's slider shows 0 while muted.
     pub muted: bool,
-    /// The download queue + state (songs + collections), persisted
-    /// to `downloads.json` so an interrupted download resumes.
-    pub downloads: DownloadManager,
     /// The download event channel's receiving end, shared with the
     /// listener the Shell spawns (one listener at a time, blocking
     /// on recv; the DownloadEvent handler re-spawns it after each
@@ -235,6 +234,9 @@ pub enum Message {
     /// download task. The handler updates the download state and
     /// re-spawns the listener.
     DownloadEvent(DownloadEvent),
+    /// Delete a download: one song's file (wherever it was
+    /// downloaded from), or a whole collection's download.
+    DeleteDownload(DetailsTarget),
     PlayNext(Vec<Song>),
     PropertiesLoaded(Result<DetailsContent, String>),
     CloseProperties,
@@ -258,6 +260,7 @@ pub enum Message {
     SetAutoDownloadRecent(bool),
     SetImageCacheLimitMb(u64),
     SetDownloadQuality(QualitySetting),
+    SetRecentMax(u64),
     RetryHome,
     Noop,
 }
@@ -711,12 +714,9 @@ fn pinned_nav_item(
     // A downloaded item gets a filled circle check at the start of
     // the subtitle.
     let downloaded = if item.kind == "song" {
-        shell.downloads.is_downloaded(&item.id)
+        shell.catalog.is_downloaded(&item.id)
     } else {
-        shell
-            .downloads
-            .collection(&item.id)
-            .is_some_and(|c| c.status == crate::download::DownloadStatus::Completed)
+        shell.catalog.collection_complete(&item.id)
     };
     let subtitle: View = if downloaded && !item.subtitle.is_empty() {
         StackPanel::new()
@@ -828,7 +828,6 @@ impl Component for Shell {
 
     fn create(_input: &(), context: &ComponentContext<Self>) -> Self {
         let settings = Settings::load();
-        let library = Library::load();
         let mut player = Player::new();
         player.set_volume(settings.volume);
         player.set_repeat_all(settings.repeat == RepeatMode::All);
@@ -838,12 +837,12 @@ impl Component for Shell {
             .take_smtc_receiver()
             .map(|rx| Arc::new(Mutex::new(rx)));
 
-        // Downloads: load the persisted queue (an interrupted
-        // download resumes) and open the event channel the download
-        // tasks report progress on.
+        // The catalog: load every known song / collection (an
+        // interrupted download resumes) and open the event
+        // channel the download tasks report progress on.
         let app_dir = crate::store::app_dir();
-        let download_dir = download::default_download_dir(&app_dir);
-        let downloads = DownloadManager::load(&app_dir, download_dir);
+        let download_dir = catalog::default_download_dir(&app_dir);
+        let catalog = Catalog::load(&app_dir, download_dir);
         let (download_tx, download_rx) = tokio::sync::mpsc::channel::<DownloadEvent>(256);
         let download_rx = Some(Arc::new(tokio::sync::Mutex::new(download_rx)));
         let download_tx = Some(download_tx);
@@ -874,7 +873,7 @@ impl Component for Shell {
             search_all: None,
             search_loading: false,
             search_error: None,
-            library,
+            catalog,
             settings,
             player,
             smtc_rx,
@@ -882,7 +881,6 @@ impl Component for Shell {
             duration: 0.0,
             playing: false,
             muted: false,
-            downloads,
             download_rx,
             download_tx,
         };
@@ -896,14 +894,15 @@ impl Component for Shell {
         // Point the player at the already-downloaded files, so they
         // play from disk (offline) instead of streaming.
         let mut shell = shell;
-        let completed: Vec<(String, std::path::PathBuf)> = shell
-            .downloads
-            .items
+        let completed: Vec<String> = shell
+            .catalog
+            .media
             .values()
-            .filter(|item| item.status == DownloadStatus::Completed)
-            .map(|item| (item.song_id.clone(), shell.downloads.file_path(item)))
+            .filter(|row| row.status == catalog::MediaStatus::Completed)
+            .map(|row| row.id.clone())
             .collect();
-        for (song_id, path) in completed {
+        for song_id in completed {
+            let path = shell.catalog.music_file(&song_id);
             shell.player.set_local_path(song_id, path);
         }
         shell
@@ -1165,6 +1164,13 @@ impl Component for Shell {
                 self.settings.download_quality = quality;
                 self.settings.save();
             }
+            Message::SetRecentMax(max) => {
+                self.settings.recent_max = max;
+                self.settings.save();
+                // Trim the recent list to the new cap right away.
+                self.catalog.trim_recents(max as usize);
+                self.catalog.save();
+            }
             Message::Tick => {
                 self.position = self.player.position_secs();
                 self.duration = self.player.duration_secs();
@@ -1206,7 +1212,7 @@ impl Component for Shell {
                 self.player.sync_smtc_status();
             }
             Message::ToggleLike(song) => {
-                if self.library.toggle_like(song.clone()) && self.settings.auto_download_liked {
+                if self.catalog.toggle_like(&song) && self.settings.auto_download_liked {
                     self.update(
                         Message::DownloadTarget(DetailsTarget {
                             kind: "song".to_string(),
@@ -1220,9 +1226,7 @@ impl Component for Shell {
                 }
             }
             Message::ToggleLikeAlbum(album) => {
-                if self.library.toggle_like_album(album.clone())
-                    && self.settings.auto_download_liked
-                {
+                if self.catalog.toggle_like_album(&album) && self.settings.auto_download_liked {
                     self.update(
                         Message::DownloadTarget(DetailsTarget {
                             kind: "album".to_string(),
@@ -1236,8 +1240,7 @@ impl Component for Shell {
                 }
             }
             Message::ToggleLikePlaylist(playlist) => {
-                if self.library.toggle_like_playlist(playlist.clone())
-                    && self.settings.auto_download_liked
+                if self.catalog.toggle_like_playlist(&playlist) && self.settings.auto_download_liked
                 {
                     self.update(
                         Message::DownloadTarget(DetailsTarget {
@@ -1252,9 +1255,7 @@ impl Component for Shell {
                 }
             }
             Message::ToggleLikeArtist(artist) => {
-                if self.library.toggle_like_artist(artist.clone())
-                    && self.settings.auto_download_liked
-                {
+                if self.catalog.toggle_like_artist(&artist) && self.settings.auto_download_liked {
                     self.update(
                         Message::DownloadTarget(DetailsTarget {
                             kind: "artist".to_string(),
@@ -1278,6 +1279,24 @@ impl Component for Shell {
                 // fetched for (matched by sequence number). If that
                 // entry was already popped (the user went back while
                 // it loaded), the reply is dropped.
+                let result = match result {
+                    Ok(content) => Ok(content),
+                    Err(err) => {
+                        // Offline fallback: when the fetch fails
+                        // but part of this target is downloaded,
+                        // show the downloaded content instead of
+                        // the error.
+                        let target = self
+                            .details
+                            .iter()
+                            .find(|d| d.seq == seq)
+                            .map(|d| d.target.clone());
+                        match target.and_then(|t| self.offline_details_inner(&t, false)) {
+                            Some(content) => Ok(content),
+                            None => Err(err),
+                        }
+                    }
+                };
                 if let Some(details) = self.details.iter_mut().find(|d| d.seq == seq) {
                     details.loading = false;
                     match result {
@@ -1345,7 +1364,7 @@ impl Component for Shell {
                 // Pinning downloads the item too (when the setting
                 // is on), so a pinned song / album / playlist /
                 // artist is available offline.
-                if self.library.toggle_pin(item) && self.settings.auto_download_pinned {
+                if self.catalog.toggle_pin(&item) && self.settings.auto_download_pinned {
                     self.update(Message::DownloadTarget(target), context);
                 }
             }
@@ -1355,100 +1374,40 @@ impl Component for Shell {
             Message::DownloadTarget(target) => {
                 // Close the context menu (when this came from one).
                 self.menu = None;
-                // Already downloaded, or already downloading: do
-                // nothing (tapping Download again does not restart
-                // a finished or in-flight download).
-                let already = match target.kind.as_str() {
-                    "song" => {
-                        self.downloads.is_downloaded(&target.id)
-                            || self.downloads.is_downloading(&target.id)
+                if target.kind == "song" {
+                    // Already in flight: nothing to do. Otherwise
+                    // fetch the song; the prepare step touches it
+                    // when it is already downloaded and only queues
+                    // a real download when it is not.
+                    if !self.catalog.is_downloading(&target.id) {
+                        self.spawn_download_target(context, target);
                     }
-                    _ => self.downloads.is_collection_downloading(&target.id),
-                };
-                if !already {
+                } else if self.catalog.is_collection_downloading(&target.id) {
+                    // A download for this collection is in flight.
+                } else if self.catalog.collection_complete(&target.id) {
+                    // Fully downloaded already: a re-request is a
+                    // touch (it floats back to the top of the
+                    // recent orderings), never a second download.
+                    self.catalog.touch_collection(&target.id);
+                } else {
                     self.spawn_download_target(context, target);
                 }
             }
             Message::DownloadTargetReady(target, songs) => {
                 let quality = Quality::from_setting(self.settings.download_quality);
-                let is_collection = target.kind != "song";
-                // A collection download groups its songs under the
-                // collection id; a lone song belongs to no
-                // collection (it lands in the auto "Downloads"
-                // playlist in the Library instead).
-                let collection_id = if is_collection {
-                    Some(target.id.clone())
-                } else {
-                    None
-                };
-                let subfolder = if is_collection {
-                    // The folder is named by the collection's ID,
-                    // not its title — two different albums /
-                    // playlists / artists can share a title, and
-                    // their songs must not land in the same folder.
-                    download::sanitize_filename(&target.id)
-                } else {
-                    String::new()
-                };
-                if is_collection {
-                    self.downloads.collections.insert(
-                        target.id.clone(),
-                        crate::download::CollectionDownload {
-                            id: target.id.clone(),
-                            kind: target.kind.clone(),
-                            title: target.title.clone(),
-                            total_items: songs.len(),
-                            completed_items: 0,
-                            total_bytes: 0,
-                            downloaded_bytes: 0,
-                            status: DownloadStatus::Queued,
-                            art: target.art.clone(),
-                        },
-                    );
-                }
-                let mut items = Vec::new();
-                let mut song_ids = Vec::new();
-                for song in &songs {
-                    let Some(url) = crate::player::pick_url(song, quality) else {
-                        continue;
-                    };
-                    let artist = crate::views::artist_names(song);
-                    let item = crate::download::DownloadItem {
-                        song_id: song.id.clone(),
-                        title: song.name.clone(),
-                        artist: artist.clone(),
-                        collection_id: collection_id.clone(),
-                        url,
-                        total_bytes: None,
-                        downloaded_bytes: 0,
-                        status: DownloadStatus::Queued,
-                        error: None,
-                        file_name: download::song_file_name(&song.id),
-                        subfolder: subfolder.clone(),
-                        art: crate::views::art_url(&song.image, "500x500"),
-                        album: song.album.name.clone(),
-                        duration: song.duration,
-                        local_image: None,
-                    };
-                    // Resume a partial file: the download task
-                    // picks up the `.part` size itself.
-                    self.downloads
-                        .items
-                        .insert(item.song_id.clone(), item.clone());
-                    song_ids.push(item.song_id.clone());
-                    items.push(item);
-                }
-                // The collection -> songs mapping, so a downloaded
-                // album / playlist / artist's song list is
-                // available offline.
-                if let Some(collection_id) = &collection_id {
-                    self.downloads
-                        .collection_songs
-                        .insert(collection_id.clone(), song_ids);
-                }
-                self.downloads.save(&crate::store::app_dir());
-                for item in items {
-                    self.spawn_download_task(context, item);
+                let spawn = self.catalog.prepare_download(
+                    &catalog::TargetInfo {
+                        kind: &target.kind,
+                        id: &target.id,
+                        title: &target.title,
+                        subtitle: &target.subtitle,
+                        art: target.art.as_deref(),
+                    },
+                    &songs,
+                    quality,
+                );
+                for row in spawn {
+                    self.spawn_download_task(context, row);
                 }
             }
             Message::DownloadTargetFailed(_target, _err) => {
@@ -1466,54 +1425,34 @@ impl Component for Shell {
                         downloaded,
                         total,
                     } => {
-                        if let Some(item) = self.downloads.items.get_mut(&song_id) {
-                            item.downloaded_bytes = downloaded;
-                            if total.is_some() {
-                                item.total_bytes = total;
-                            }
-                            item.status = DownloadStatus::Downloading;
-                        }
+                        self.catalog.mark_progress(&song_id, downloaded, total);
                     }
-                    DownloadEvent::Completed {
-                        song_id,
-                        local_image,
-                    } => {
-                        // Compute the local file path first (an
-                        // immutable borrow), then update the item.
-                        let local_path = self
-                            .downloads
-                            .items
-                            .get(&song_id)
-                            .map(|item| self.downloads.file_path(item));
-                        let mut collection_id = None;
-                        if let Some(item) = self.downloads.items.get_mut(&song_id) {
-                            item.status = DownloadStatus::Completed;
-                            item.error = None;
-                            item.local_image = local_image;
-                            collection_id = item.collection_id.clone();
-                        }
+                    DownloadEvent::Completed { song_id } => {
+                        self.catalog.mark_completed(&song_id);
                         // The player now plays this song from disk
                         // (offline) instead of streaming it.
-                        if let Some(path) = local_path {
-                            self.player.set_local_path(song_id.clone(), path);
-                        }
-                        if let Some(collection_id) = collection_id
-                            && let Some(collection) =
-                                self.downloads.collections.get_mut(&collection_id)
-                        {
-                            collection.completed_items += 1;
-                            if collection.completed_items >= collection.total_items {
-                                collection.status = DownloadStatus::Completed;
-                            }
-                        }
-                        self.downloads.save(&crate::store::app_dir());
+                        let path = self.catalog.music_file(&song_id);
+                        self.player.set_local_path(song_id, path);
                     }
                     DownloadEvent::Failed { song_id, error } => {
-                        if let Some(item) = self.downloads.items.get_mut(&song_id) {
-                            item.status = DownloadStatus::Failed;
-                            item.error = Some(error);
-                        }
-                        self.downloads.save(&crate::store::app_dir());
+                        self.catalog.mark_failed(&song_id, error);
+                    }
+                }
+            }
+            Message::DeleteDownload(target) => {
+                // Close the context menu (when this came from one).
+                self.menu = None;
+                if target.kind == "song" {
+                    // One song's download goes — even if it was
+                    // downloaded as part of a collection.
+                    self.catalog.delete_media_download(&target.id);
+                    self.player.remove_local_path(&target.id);
+                } else {
+                    // A collection's download goes; a member's
+                    // file only goes with its last membership.
+                    let deleted = self.catalog.delete_collection_download(&target.id);
+                    for song_id in deleted {
+                        self.player.remove_local_path(&song_id);
                     }
                 }
             }
@@ -1527,7 +1466,8 @@ impl Component for Shell {
                     let quality = Quality::from_setting(self.settings.quality);
                     self.player.load_queue(songs, 0, quality);
                     if let Some(song) = self.player.current() {
-                        self.library.push_recent(song.clone());
+                        self.catalog
+                            .push_recent(song, self.settings.recent_max as usize);
                     }
                     self.playing = true;
                     self.position = 0.0;
@@ -1657,9 +1597,10 @@ impl Component for Shell {
                 context,
             ),
         ];
-        if !self.library.pinned.is_empty() {
+        let pinned_items = self.catalog.pinned_items();
+        if !pinned_items.is_empty() {
             menu_items.push(nav_divider());
-            for pinned in &self.library.pinned {
+            for pinned in &pinned_items {
                 let hovered = self.hovered_card.as_deref() == Some(pinned.id.as_str());
                 menu_items.push(pinned_nav_item(pinned, hovered, self, context));
             }
@@ -1826,18 +1767,70 @@ impl Shell {
         Grid::new().keyed_children(layers)
     }
 
-    /// The context menu: Play, Play next, Properties.
+    /// The context menu: Play, Play next, Download (or Delete
+    /// download), Properties, Pin.
     fn menu_view(&self, menu: &MenuState, context: &mut ViewContext<Self>) -> View {
         let target = menu.target.clone();
         let play_target = target.clone();
         let next_target = target.clone();
         let download_target = target.clone();
+        let delete_target = target.clone();
         let pin_target = target.clone();
-        let pin_label = if self.library.is_pinned(&target.kind, &target.id) {
+        let pin_label = if self.catalog.is_pinned(&target.kind, &target.id) {
             "Unpin"
         } else {
             "Pin"
         };
+        // Download state decides the download row: a downloaded
+        // item offers Delete download; a partially downloaded
+        // collection offers both (continue, or remove).
+        let (has_download, fully_downloaded) = if target.kind == "song" {
+            let done = self.catalog.is_downloaded(&target.id);
+            (done, done)
+        } else {
+            match self.catalog.collection_progress(&target.id) {
+                Some((completed, total)) => (completed > 0, total > 0 && completed == total),
+                None => (false, false),
+            }
+        };
+        let mut rows: Vec<KeyedView> = vec![
+            KeyedView::new(
+                "play",
+                menu_row("Play", Message::MenuPlay(play_target), context),
+            ),
+            KeyedView::new(
+                "next",
+                menu_row("Play next", Message::MenuPlayNext(next_target), context),
+            ),
+        ];
+        if !fully_downloaded {
+            rows.push(KeyedView::new(
+                "download",
+                menu_row(
+                    "Download",
+                    Message::DownloadTarget(download_target),
+                    context,
+                ),
+            ));
+        }
+        if has_download {
+            rows.push(KeyedView::new(
+                "delete",
+                menu_row(
+                    "Delete download",
+                    Message::DeleteDownload(delete_target),
+                    context,
+                ),
+            ));
+        }
+        rows.push(KeyedView::new(
+            "properties",
+            menu_row("Properties", Message::MenuProperties(target), context),
+        ));
+        rows.push(KeyedView::new(
+            "pin",
+            menu_row(pin_label, Message::TogglePin(pin_target), context),
+        ));
         Border::new()
             .width(220.0)
             .horizontal_alignment(HorizontalAlignment::Left)
@@ -1849,17 +1842,7 @@ impl Shell {
             .border_thickness(1.0)
             .corner_radius(CornerRadius::uniform(8.0))
             .padding(4.0)
-            .content(StackPanel::new().spacing(2.0).children((
-                menu_row("Play", Message::MenuPlay(play_target), context),
-                menu_row("Play next", Message::MenuPlayNext(next_target), context),
-                menu_row(
-                    "Download",
-                    Message::DownloadTarget(download_target),
-                    context,
-                ),
-                menu_row("Properties", Message::MenuProperties(target), context),
-                menu_row(pin_label, Message::TogglePin(pin_target), context),
-            )))
+            .content(StackPanel::new().spacing(2.0).keyed_children(rows))
     }
 
     /// The Properties dialog: title, type, subtitle, and the loaded
@@ -2003,22 +1986,32 @@ impl Shell {
         spawn_details_load(context, seq, target);
     }
 
-    /// Build a details page from the downloaded data (SQLite), for
-    /// a collection or song that is fully downloaded. This is what
-    /// makes a downloaded album / playlist / artist / song open
-    /// offline — the songs are rebuilt from the stored download
-    /// rows (with their locally cached art), and the collection
-    /// itself is rebuilt from the target (title / subtitle / art).
-    /// Returns `None` when the target is not fully downloaded, so
-    /// the caller falls back to the network.
+    /// Build a details page from the catalog's downloaded data,
+    /// for a song or collection that is fully downloaded. This is
+    /// what makes a downloaded album / playlist / artist / song
+    /// open offline. Returns `None` when the target is not fully
+    /// downloaded, so the caller falls back to the network.
     fn offline_details(&self, target: &DetailsTarget) -> Option<DetailsContent> {
+        self.offline_details_inner(target, true)
+    }
+
+    /// The offline details builder. With `require_complete`, a
+    /// collection only qualifies when every member is downloaded
+    /// (the open-details fast path); without it, any downloaded
+    /// member qualifies (the fallback when a network fetch
+    /// failed \u2014 the page shows the downloaded subset).
+    fn offline_details_inner(
+        &self,
+        target: &DetailsTarget,
+        require_complete: bool,
+    ) -> Option<DetailsContent> {
         match target.kind.as_str() {
             "song" => {
-                let item = self.downloads.items.get(&target.id)?;
-                if item.status != DownloadStatus::Completed {
+                let row = self.catalog.media.get(&target.id)?;
+                if row.status != catalog::MediaStatus::Completed {
                     return None;
                 }
-                let song = item.to_song();
+                let song = row.to_song(&self.catalog.download_dir);
                 Some(DetailsContent {
                     song: Some(song.clone()),
                     songs: vec![song],
@@ -2031,55 +2024,29 @@ impl Shell {
                 })
             }
             "album" | "playlist" | "chart" | "artist" => {
-                let collection = self.downloads.collection(&target.id)?;
-                if collection.status != DownloadStatus::Completed {
+                let row = self.catalog.collections.get(&target.id)?;
+                if require_complete && !self.catalog.collection_complete(&target.id) {
                     return None;
                 }
-                let song_ids = self.downloads.collection_song_ids(&target.id);
-                if song_ids.is_empty() {
-                    return None;
-                }
-                let songs: Vec<Song> = song_ids
+                let songs: Vec<Song> = self
+                    .catalog
+                    .collection_song_ids(&target.id)
                     .iter()
-                    .filter_map(|id| self.downloads.items.get(id))
-                    .filter(|item| item.status == DownloadStatus::Completed)
-                    .map(|item| item.to_song())
+                    .filter_map(|id| self.catalog.media.get(id))
+                    .filter(|m| m.status == catalog::MediaStatus::Completed)
+                    .map(|m| m.to_song(&self.catalog.download_dir))
                     .collect();
                 if songs.is_empty() {
                     return None;
                 }
-                let art = target
-                    .art
-                    .clone()
-                    .map(|url| {
-                        vec![saavnapi::DownloadLink {
-                            quality: "500x500".to_string(),
-                            url,
-                        }]
-                    })
-                    .unwrap_or_default();
                 match target.kind.as_str() {
                     "album" => Some(DetailsContent {
                         song: None,
-                        songs,
+                        songs: songs.clone(),
                         lyrics: None,
                         subtitle: target.subtitle.clone(),
                         art: target.art.clone(),
-                        album: Some(Album {
-                            id: target.id.clone(),
-                            name: target.title.clone(),
-                            description: None,
-                            year: None,
-                            kind: "album".to_string(),
-                            play_count: None,
-                            language: String::new(),
-                            explicit_content: false,
-                            artists: saavnapi::ArtistGroups::default(),
-                            song_count: Some(collection.total_items as u64),
-                            url: String::new(),
-                            image: art,
-                            songs: None,
-                        }),
+                        album: Some(self.catalog.album_for(row, Some(songs))),
                         artist: None,
                         playlist: None,
                     }),
@@ -2087,57 +2054,21 @@ impl Shell {
                         song: None,
                         songs: songs.clone(),
                         lyrics: None,
-                        subtitle: target.subtitle.clone(),
+                        subtitle: row.subtitle.clone(),
                         art: target.art.clone(),
                         album: None,
-                        artist: Some(Artist {
-                            id: target.id.clone(),
-                            name: target.title.clone(),
-                            url: String::new(),
-                            kind: "artist".to_string(),
-                            image: art,
-                            follower_count: None,
-                            fan_count: None,
-                            is_verified: None,
-                            dominant_language: None,
-                            dominant_type: None,
-                            bio: None,
-                            dob: None,
-                            fb: None,
-                            twitter: None,
-                            wiki: None,
-                            available_languages: Vec::new(),
-                            is_radio_present: None,
-                            top_songs: Some(songs),
-                            top_albums: None,
-                            singles: None,
-                            similar_artists: None,
-                        }),
+                        artist: Some(self.catalog.artist_for(row, Some(songs))),
                         playlist: None,
                     }),
                     _ => Some(DetailsContent {
                         song: None,
-                        songs,
+                        songs: songs.clone(),
                         lyrics: None,
                         subtitle: target.subtitle.clone(),
                         art: target.art.clone(),
                         album: None,
                         artist: None,
-                        playlist: Some(Playlist {
-                            id: target.id.clone(),
-                            name: target.title.clone(),
-                            description: None,
-                            year: None,
-                            kind: "playlist".to_string(),
-                            play_count: None,
-                            language: String::new(),
-                            explicit_content: false,
-                            song_count: Some(collection.total_items as u64),
-                            url: String::new(),
-                            image: art,
-                            songs: None,
-                            artists: None,
-                        }),
+                        playlist: Some(self.catalog.playlist_for(row, Some(songs))),
                     }),
                 }
             }
@@ -2157,7 +2088,7 @@ impl Shell {
             0.0
         };
         let y = if y.is_finite() {
-            y.clamp(0.0, 800.0 - 180.0)
+            y.clamp(0.0, 800.0 - 230.0)
         } else {
             0.0
         };
@@ -2233,31 +2164,20 @@ impl Shell {
     /// closed). Each song restarts its download task, resuming its
     /// partial file.
     fn resume_downloads(&self, context: &ComponentContext<Self>) {
-        let queued: Vec<crate::download::DownloadItem> = self
-            .downloads
-            .items
-            .values()
-            .filter(|item| item.status == DownloadStatus::Queued)
-            .cloned()
-            .collect();
-        for item in queued {
-            self.spawn_download_task(context, item);
+        for row in self.catalog.queued_media() {
+            self.spawn_download_task(context, row);
         }
     }
 
     /// Start one song's download task in the background.
-    fn spawn_download_task(
-        &self,
-        context: &ComponentContext<Self>,
-        item: crate::download::DownloadItem,
-    ) {
+    fn spawn_download_task(&self, context: &ComponentContext<Self>, row: catalog::MediaRow) {
         let Some(tx) = self.download_tx.clone() else {
             return;
         };
-        let download_dir = self.downloads.download_dir.clone();
+        let download_dir = self.catalog.download_dir.clone();
         context.spawn_background(move |_| {
             let result =
-                data::runtime_handle().block_on(download::download_song(item, download_dir, tx));
+                data::runtime_handle().block_on(catalog::download_media(row, download_dir, tx));
             match result {
                 Ok(()) => Message::Noop,
                 Err(_) => Message::Noop,
@@ -2291,10 +2211,11 @@ impl Shell {
     /// per-page fades).
     fn after_track_change(&mut self, context: &ComponentContext<Self>) {
         if let Some(song) = self.player.current().cloned() {
-            self.library.push_recent(song.clone());
+            self.catalog
+                .push_recent(&song, self.settings.recent_max as usize);
             // A played song joins the recent list, and (when the
             // setting is on) it is downloaded too, so the recent
-            // 100 songs are available offline.
+            // songs (up to the Settings cap) are available offline.
             if self.settings.auto_download_recent {
                 self.update(
                     Message::DownloadTarget(DetailsTarget {
@@ -2361,7 +2282,7 @@ impl Shell {
                 let links = views::artist_links(&song.artists, 2, 44, context);
                 // A downloaded song gets a filled circle check at
                 // the start of the artist line.
-                let artist_view: View = if self.downloads.is_downloaded(&song.id) {
+                let artist_view: View = if self.catalog.is_downloaded(&song.id) {
                     StackPanel::new()
                         .orientation(Orientation::Horizontal)
                         .spacing(4.0)
@@ -2632,7 +2553,8 @@ impl Shell {
                     subtitle: views::artist_names(song),
                     art: views::art_url(&song.image, "500x500"),
                 };
-                let is_pinned = self.library.is_pinned(&target.kind, &target.id);
+                let is_pinned = self.catalog.is_pinned(&target.kind, &target.id);
+                let has_download = self.catalog.is_downloaded(&target.id);
                 Button::new()
                     .content(
                         SymbolIcon::new()
@@ -2640,7 +2562,12 @@ impl Shell {
                             .horizontal_alignment(HorizontalAlignment::Center)
                             .vertical_alignment(VerticalAlignment::Center),
                     )
-                    .menu(views::context_menu(&target, is_pinned, context))
+                    .menu(views::context_menu(
+                        &target,
+                        is_pinned,
+                        has_download,
+                        context,
+                    ))
             }
             None => Border::new()
                 .width(32.0)
@@ -2762,7 +2689,7 @@ impl Shell {
                 ));
                 // A downloaded song gets a filled circle check at
                 // the start of the artist line.
-                let artists_view: View = if self.downloads.is_downloaded(&song.id) {
+                let artists_view: View = if self.catalog.is_downloaded(&song.id) {
                     StackPanel::new()
                         .orientation(Orientation::Horizontal)
                         .spacing(4.0)
@@ -2811,7 +2738,7 @@ impl Shell {
                     }
                     _ => {}
                 }
-                let liked = self.library.is_liked(&song.id);
+                let liked = self.catalog.is_liked(&song.id);
                 rows.push(KeyedView::new(
                     "like",
                     Button::new()

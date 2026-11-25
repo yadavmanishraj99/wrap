@@ -194,8 +194,10 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   sits on a Border and the menu's click-away layer is a sibling of
   the menu, never its parent.
 - **Pinning** — any song, artist, album, playlist, or chart can be
-  pinned from its card's context menu (Pin / Unpin). Pinned items
-  appear in the sidebar below a divider after Library, in pin order,
+  pinned from its card's context menu (Pin / Unpin) or the Pin
+  button in a details page's action row. Pinned items
+  appear in the sidebar below a divider after Library, most
+  recently pinned first,
   each as a row with its art (48px, the same size as the song-row art
   in the details views) + title (14px, the same size as the nav
   items) + subtitle (12px, dimmed, below the title with a small gap
@@ -210,8 +212,8 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   the app has 4px rounded corners (pinned art, song-row art, details
   header art, media-card art, Now Playing art, player-bar art);
   artist art is a full circle everywhere (media cards, pinned rows,
-  details header, Now Playing brief). They persist
-  in `library.json`. A pinned row is a shortcut, not a page: clicking
+  details header, Now Playing brief). Pins persist in the SQLite
+  catalog (`library_refs`). A pinned row is a shortcut, not a page: clicking
   it never changes the nav selection. A pinned song plays on click
   (its full Song is fetched by id first); any other pinned item opens
   its details page. The divider shows only while pinned items exist.
@@ -223,7 +225,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   `MediaSource` is closed explicitly (`Close()` releases its stream
   and network resources at once) instead of leaving it to COM
   refcounting. Rust's ownership frees the rest: popped details,
-  replaced search/home data, and the capped (50) recents are
+  replaced search/home data, and the capped recents are
   dropped when no longer needed.
 
 ## Pages
@@ -236,18 +238,20 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Now Playing | Live — an opaque 340px sidebar on the right (a solid fill, so the page never bleeds through it). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which appears at once; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |
 | Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
 | Library | Live — liked songs, recently played, liked albums/playlists/artists (persisted locally), all as Home-style media-card sections; albums, playlists and artists land here via the Like button on their pages. **Downloads** (auto-playlist of individually downloaded songs) and **Downloaded artists** (one playlist per downloaded artist, holding their top songs) also live here |
-| Settings | Live — theme, window material (Acrylic default), stream quality, autoplay, about |
+| Settings | Live — theme, window material (Acrylic default), stream quality, autoplay, downloads (auto-download switches, download quality, image cache size, recently-played cap), about |
 
 ## Downloads
 
 Live — a song, album, playlist or artist can be downloaded for offline listening:
 
 - **Where the button is:** album / playlist / artist / song pages have a Download button in the action row; everywhere else (media cards, song rows, pinned rows) Download lives in the context menu (right-click, or the More button). The details-page button also shows the download state (a filled check once downloaded, dimmed while downloading).
-- **What downloads:** a single song goes into the auto **Downloads** playlist in the Library. A full album / playlist downloads every song into a folder named after it. An artist downloads their top songs and creates a playlist for them under the artist's name (**Downloaded artists** in the Library). Files go to `%USERPROFILE%\Music\Resonance`. Files and folders are named by **ID**, not by title — a collection's folder is its collection ID and a song's file is `<song_id>.mp3` — because two different songs or collections can share a title, and their files must never collide or overwrite each other. Downloads are saved at the download quality set in Settings (separate from the stream quality).
+- **What downloads:** a single song goes into the auto **Downloads** playlist in the Library. A full album / playlist downloads every song. An artist downloads their top songs and creates a playlist for them under the artist's name (**Downloaded artists** in the Library). Downloads are saved at the download quality set in Settings (separate from the stream quality).
+- **Storage model:** everything lives in one SQLite catalog (`%LOCALAPPDATA%\Resonance\resonance.db`) with four tables — `media` (one row per song: metadata + download state), `collections` (one row per album / playlist / chart / artist, with everything its details view needs), `collection_media` (the relationship: which songs belong to which collection, in track order — one song can belong to many collections) and `library_refs` (liked / pinned / recent entries, each just pointing at a media or collection row). On disk there are only two folders under `%USERPROFILE%\Music\Resonance`: `music\<song_id>.mp3` — the one real copy of each song, named by ID — and `covers\<cover_id>.jpg` — one cover per id (a collection's songs share the collection's cover). A song is downloaded **once**, however many collections contain it; asking for it again from another playlist just touches its `updated_at` timestamp (every row carries `created_at` / `updated_at`, and pinned / recent / downloads order by `updated_at`, newest first). Liking or pinning also creates the item's catalog row (not downloaded), so the library, pins and recents all live in the same catalog — there is no `library.json` any more (an old one is migrated on first run, as are the pre-catalog download tables and their per-collection folders).
 - **Progress:** a downloading song shows a circular progress ring with a download arrow in the middle, centered on its art (song rows and media cards). A downloading collection shows its overall progress ("Downloading X of Y songs" + a bar) above the song list on its page, while each song row shows its own progress on its art. A song downloaded on its own shows progress only on itself — the collection page shows nothing. A downloaded song gets a filled circle check at the start of its subtitle, **everywhere it appears** — song rows, media cards, pinned rows in the sidebar, the player bar, and the Now Playing sidebar.
-- **Resilience:** downloads write to a `.part` file and resume from it (HTTP `Range`) after a failure or an app restart, retrying up to 3 times with a backoff. The queue is persisted in SQLite (`%LOCALAPPDATA%\Resonance\resonance.db`, tables `downloads` + `collections` + `collection_songs`), so an interrupted download resumes on the next launch.
-- **Offline playback:** a downloaded song plays from its local file instead of streaming, so it works with no network. The song's metadata (title, artist, album, duration), its art (cached locally), and the collection → songs mapping are all stored in SQLite, so a downloaded album / playlist / artist opens from the stored data offline — no network needed. The Library's Downloads and Downloaded artists sections work offline too.
-- **Auto-download (Settings → Downloads, all on by default):** liking a song / album / playlist / artist downloads it; pinning an item downloads it; playing a song downloads it (the recent list holds the last 100 songs, and they are downloaded too). Each can be switched off separately.
+- **Resilience:** downloads write to a `.part` file and resume from it (HTTP `Range`) after a failure or an app restart, retrying up to 3 times with a backoff. The queue lives in the catalog, so an interrupted download resumes on the next launch. A startup sweep deletes orphaned files (audio whose song is not downloaded, stale partials, unreferenced covers).
+- **Deleting downloads:** the context menus (and the details More menu) offer **Delete download**. Deleting one song removes its file even if it was downloaded as part of an album / playlist — the song stays in the collection's tracklist, just not downloaded, and the collection's progress drops accordingly (re-downloading it fetches only the missing songs). Deleting a whole collection's download removes its memberships, and a song's file is only deleted when that was its last membership — a song also in another downloaded collection, or downloaded on its own, keeps its file. Deleting wins over auto-download: nothing re-downloads until the item is liked / pinned / played / downloaded again.
+- **Offline playback:** a downloaded song plays from its local file instead of streaming, so it works with no network. The catalog holds the song metadata, the covers are on disk, and the collection → songs relationships are stored, so a downloaded album / playlist / artist opens from the stored data offline — no network needed. (A partially downloaded collection opens from the network when online, and falls back to its downloaded songs when the fetch fails.) The Library's Downloads and Downloaded artists sections work offline too.
+- **Auto-download (Settings → Downloads, all on by default):** liking a song / album / playlist / artist downloads it; pinning an item downloads it; playing a song downloads it (the recent list's size is configurable in Settings — 50 / 100 / 200 / 500, default 100 — and recent songs are downloaded too). Each can be switched off separately.
 - **Image cache (Settings → Downloads):** album art is cached on disk (`%LOCALAPPDATA%\Resonance\image_cache\`), so Home and details pages do not re-download the same image on every visit. The size limit is configurable (100 MB / 250 MB / 500 MB / 1 GB, default 500 MB); past the limit the least-recently-used images are evicted.
 - **Not done yet:** minimizing to the system tray when the app is closed while a download is running. Reactor exposes no window-close event, so a proper minimize-to-tray needs Win32 window subclassing that cannot be verified from the Linux build machine. Closing the app mid-download is safe regardless — the partial file and queue are persisted, and the download resumes on the next launch.
 
@@ -259,15 +263,16 @@ crates/resonance/src/
   app.rs      Shell component: state, messages, TitleBar +
               NavigationView + player bar, player polling
   data.rs     shared tokio runtime + saavnapi client
-  download.rs download engine + SQLite queue (resonance.db),
-              resume (.part + Range) + retry, Downloads playlist,
-              offline song/collection data, art caching
+  catalog.rs the SQLite catalog (media / collections /
+              collection_media / library_refs) + the download
+              engine: resume (.part + Range) + retry, dedup by
+              id, offline data, covers; download.rs is a tombstone
   image_cache.rs disk cache for album art (Home/details), with a
               size limit + least-recently-used eviction
   player.rs   MediaPlayer wrapper: queue, play/pause/seek/volume,
               shuffle-upcoming, repeat wrap/restart
-  store.rs    Library + Settings persistence (%LOCALAPPDATA%),
-              incl. shuffle + repeat mode
+  store.rs    Settings persistence (settings.json,
+              %LOCALAPPDATA%), incl. shuffle + repeat mode
   views.rs    shared bits: song row, media card, card section
               (Home/Search/Library layout), clickable artist links,
               section header, formatting

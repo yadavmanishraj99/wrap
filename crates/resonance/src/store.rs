@@ -1,12 +1,12 @@
-//! Persisted state: the library (liked songs/albums/playlists/
-//! artists, recents) and settings, as JSON under
-//! `%LOCALAPPDATA%\Resonance`. All loads are best-effort — a missing
-//! or corrupt file yields defaults, never an error.
+//! Persisted settings, as JSON under `%LOCALAPPDATA%\Resonance`.
+//! All loads are best-effort — a missing or corrupt file yields
+//! defaults, never an error. (The library — liked / pinned /
+//! recent / downloads — lives in the SQLite catalog instead;
+//! see `catalog.rs`.)
 
 use std::fs;
 use std::path::PathBuf;
 
-use saavnapi::{Album, Artist, Playlist, Song};
 use serde::{Deserialize, Serialize};
 
 pub fn app_dir() -> PathBuf {
@@ -129,6 +129,14 @@ pub struct Settings {
     /// the stream, or lower to save space).
     #[serde(default)]
     pub download_quality: QualitySetting,
+    /// How many recently played songs are kept. Customizable in
+    /// Settings; 100 by default.
+    #[serde(default = "default_recent_max")]
+    pub recent_max: u64,
+}
+
+fn default_recent_max() -> u64 {
+    100
 }
 
 fn default_true() -> bool {
@@ -154,6 +162,7 @@ impl Default for Settings {
             auto_download_recent: true,
             image_cache_limit_mb: 500,
             download_quality: QualitySetting::High,
+            recent_max: 100,
         }
     }
 }
@@ -170,8 +179,8 @@ impl Settings {
 
 /// A pinned media item (song, artist, album, playlist, or chart) —
 /// shown in the sidebar below the Library divider. Just enough to
-/// render the row and open/play it; the full object is fetched on
-/// demand (a pinned song is fetched by id when clicked to play).
+/// render the row and open/play it; the catalog builds these from
+/// its rows for the pinned refs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinnedItem {
     pub kind: String,
@@ -179,138 +188,6 @@ pub struct PinnedItem {
     pub title: String,
     pub subtitle: String,
     pub art: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Library {
-    pub liked_songs: Vec<Song>,
-    pub liked_albums: Vec<Album>,
-    pub liked_playlists: Vec<Playlist>,
-    /// `#[serde(default)]` so a library.json written before artist
-    /// liking existed still loads.
-    #[serde(default)]
-    pub liked_artists: Vec<Artist>,
-    pub recent_songs: Vec<Song>,
-    /// Pinned media items, in pin order (first pinned at the top of
-    /// the sidebar section). `#[serde(default)]` so a library.json
-    /// written before pinning existed still loads.
-    #[serde(default)]
-    pub pinned: Vec<PinnedItem>,
-}
-
-impl Library {
-    pub fn load() -> Self {
-        load_json("library.json").unwrap_or_default()
-    }
-
-    pub fn save(&self) {
-        save_json("library.json", self);
-    }
-
-    pub fn is_liked(&self, song_id: &str) -> bool {
-        self.liked_songs.iter().any(|song| song.id == song_id)
-    }
-
-    /// Toggle a song in liked songs. Returns the new liked state.
-    pub fn toggle_like(&mut self, song: Song) -> bool {
-        if let Some(pos) = self.liked_songs.iter().position(|s| s.id == song.id) {
-            self.liked_songs.remove(pos);
-            self.save();
-            false
-        } else {
-            self.liked_songs.push(song);
-            self.save();
-            true
-        }
-    }
-
-    /// Is this album liked?
-    pub fn is_album_liked(&self, album_id: &str) -> bool {
-        self.liked_albums.iter().any(|a| a.id == album_id)
-    }
-
-    /// Toggle an album in liked albums. Returns the new liked state.
-    pub fn toggle_like_album(&mut self, album: Album) -> bool {
-        if let Some(pos) = self.liked_albums.iter().position(|a| a.id == album.id) {
-            self.liked_albums.remove(pos);
-            self.save();
-            false
-        } else {
-            self.liked_albums.push(album);
-            self.save();
-            true
-        }
-    }
-
-    /// Is this playlist liked?
-    pub fn is_playlist_liked(&self, playlist_id: &str) -> bool {
-        self.liked_playlists.iter().any(|p| p.id == playlist_id)
-    }
-
-    /// Toggle a playlist in liked playlists. Returns the new liked state.
-    pub fn toggle_like_playlist(&mut self, playlist: Playlist) -> bool {
-        if let Some(pos) = self
-            .liked_playlists
-            .iter()
-            .position(|p| p.id == playlist.id)
-        {
-            self.liked_playlists.remove(pos);
-            self.save();
-            false
-        } else {
-            self.liked_playlists.push(playlist);
-            self.save();
-            true
-        }
-    }
-
-    /// Is this artist liked?
-    pub fn is_artist_liked(&self, artist_id: &str) -> bool {
-        self.liked_artists.iter().any(|a| a.id == artist_id)
-    }
-
-    /// Toggle an artist in liked artists. Returns the new liked state.
-    pub fn toggle_like_artist(&mut self, artist: Artist) -> bool {
-        if let Some(pos) = self.liked_artists.iter().position(|a| a.id == artist.id) {
-            self.liked_artists.remove(pos);
-            self.save();
-            false
-        } else {
-            self.liked_artists.push(artist);
-            self.save();
-            true
-        }
-    }
-
-    /// Record a play at the front of recents (deduplicated, capped).
-    pub fn push_recent(&mut self, song: Song) {
-        self.recent_songs.retain(|s| s.id != song.id);
-        self.recent_songs.insert(0, song);
-        self.recent_songs.truncate(100);
-        self.save();
-    }
-
-    /// Is this item pinned?
-    pub fn is_pinned(&self, kind: &str, id: &str) -> bool {
-        self.pinned.iter().any(|p| p.kind == kind && p.id == id)
-    }
-
-    /// Toggle an item's pinned state. Returns the new pinned state.
-    pub fn toggle_pin(&mut self, item: PinnedItem) -> bool {
-        if let Some(pos) = self
-            .pinned
-            .iter()
-            .position(|p| p.kind == item.kind && p.id == item.id)
-        {
-            self.pinned.remove(pos);
-            self.save();
-            false
-        } else {
-            self.pinned.push(item);
-            self.save();
-            true
-        }
-    }
 }
 
 fn load_json<T>(name: &str) -> Option<T>

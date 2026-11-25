@@ -37,7 +37,7 @@ pub fn view(
         .corner_radius(CornerRadius::uniform(4.0))
         .grid_column(0)
         .content(art_content);
-    let liked = shell.library.is_liked(&song.id);
+    let liked = shell.catalog.is_liked(&song.id);
     let song_for_like = song.clone();
     let song_for_play = song.clone();
 

@@ -143,6 +143,12 @@ impl Player {
         self.local_paths.insert(song_id, path);
     }
 
+    /// Forget a song's local file (its download was deleted), so
+    /// it streams again.
+    pub fn remove_local_path(&mut self, song_id: &str) {
+        self.local_paths.remove(song_id);
+    }
+
     /// Tell the player whether repeat-all is on, so the session's
     /// Next button stays enabled on the last song when it wraps.
     /// Called by the Shell whenever the repeat mode changes.
@@ -327,7 +333,7 @@ impl Player {
         // A downloaded song plays from its local file, so it works
         // offline. Otherwise it streams from the quality URL.
         let uri = if let Some(path) = self.local_paths.get(&song.id) {
-            Uri::CreateUri(&HSTRING::from(crate::download::file_uri(path)))?
+            Uri::CreateUri(&HSTRING::from(crate::catalog::file_uri(path)))?
         } else {
             let Some(url) = pick_url(song, quality) else {
                 return Ok(());

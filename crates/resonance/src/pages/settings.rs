@@ -176,11 +176,44 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                     context,
                 ),
                 toggle_row(
-                    "Download recently played songs (up to 100)",
+                    "Download recently played songs",
                     settings.auto_download_recent,
                     Message::SetAutoDownloadRecent,
                     context,
                 ),
+                StackPanel::new().spacing(8.0).children((
+                    TextBlock::new()
+                        .text("Recently played songs kept")
+                        .font_size(14.0),
+                    radio(
+                        "50 songs",
+                        "recent-max",
+                        settings.recent_max == 50,
+                        Message::SetRecentMax(50),
+                        context,
+                    ),
+                    radio(
+                        "100 songs",
+                        "recent-max",
+                        settings.recent_max == 100,
+                        Message::SetRecentMax(100),
+                        context,
+                    ),
+                    radio(
+                        "200 songs",
+                        "recent-max",
+                        settings.recent_max == 200,
+                        Message::SetRecentMax(200),
+                        context,
+                    ),
+                    radio(
+                        "500 songs",
+                        "recent-max",
+                        settings.recent_max == 500,
+                        Message::SetRecentMax(500),
+                        context,
+                    ),
+                )),
                 StackPanel::new().spacing(8.0).children((
                     TextBlock::new()
                         .text("Download quality (separate from stream quality)")

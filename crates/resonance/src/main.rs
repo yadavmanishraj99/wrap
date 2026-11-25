@@ -13,8 +13,8 @@
 //! see README.md).
 
 mod app;
+mod catalog;
 mod data;
-mod download;
 mod image_cache;
 mod pages;
 mod player;

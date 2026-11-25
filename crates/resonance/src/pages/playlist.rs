@@ -37,7 +37,7 @@ pub fn view(
         .corner_radius(CornerRadius::uniform(4.0))
         .grid_column(0)
         .content(art_content);
-    let liked = shell.library.is_playlist_liked(&playlist.id);
+    let liked = shell.catalog.is_playlist_liked(&playlist.id);
     let playlist_for_like = playlist.clone();
 
     let header = Grid::new()

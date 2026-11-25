@@ -18,7 +18,7 @@ pub fn view(
             .margin(24.0)
             .into();
     };
-    let liked = shell.library.is_artist_liked(&artist.id);
+    let liked = shell.catalog.is_artist_liked(&artist.id);
     let artist_for_like = artist.clone();
     let art_content: View = match &content.art {
         Some(url) => views::image_from_url(url)

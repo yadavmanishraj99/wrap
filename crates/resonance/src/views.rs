@@ -41,7 +41,7 @@ pub fn art_url(links: &[DownloadLink], quality: &str) -> Option<String> {
 pub fn image_from_url(url: &str) -> Image {
     let cache = crate::image_cache::cache_dir(&crate::store::app_dir());
     let source = match crate::image_cache::lookup(&cache, url) {
-        Some(path) => crate::download::file_uri(&path),
+        Some(path) => crate::catalog::file_uri(&path),
         None => url.to_string(),
     };
     Image::new().source(source).unwrap_or_else(|_| Image::new())
@@ -119,15 +119,12 @@ pub fn downloaded_badge(size: f64) -> View {
 /// downloading. Returns `None` when the collection is not
 /// downloading.
 pub fn collection_download_progress(collection_id: &str, shell: &Shell) -> Option<View> {
-    let collection = shell.downloads.collection(collection_id)?;
-    if !shell.downloads.is_collection_downloading(collection_id) {
+    let (completed, total) = shell.catalog.collection_progress(collection_id)?;
+    if !shell.catalog.is_collection_downloading(collection_id) {
         return None;
     }
-    let fraction = shell.downloads.collection_fraction(collection_id)?;
-    let label = format!(
-        "Downloading {} of {} songs",
-        collection.completed_items, collection.total_items
-    );
+    let fraction = shell.catalog.collection_fraction(collection_id)?;
+    let label = format!("Downloading {completed} of {total} songs");
     Some(
         StackPanel::new().spacing(4.0).children((
             TextBlock::new().text(label).font_size(12.0).opacity(0.7),
@@ -339,8 +336,8 @@ pub fn media_card(
     )];
     // A downloading song shows a circular progress ring with a
     // download arrow in the middle, centered on the art.
-    if target.kind == "song" && shell.downloads.is_downloading(&target.id) {
-        let fraction = shell.downloads.item_fraction(&target.id);
+    if target.kind == "song" && shell.catalog.is_downloading(&target.id) {
+        let fraction = shell.catalog.item_fraction(&target.id);
         art_children.push(KeyedView::new(
             "download",
             download_progress_overlay(size, fraction),
@@ -390,7 +387,7 @@ pub fn media_card(
     let hover_id = target.id.clone();
     // The subtitle (artist / description line). A downloaded song
     // gets a filled circle check at the start of the subtitle.
-    let subtitle: View = if target.kind == "song" && shell.downloads.is_downloaded(&target.id) {
+    let subtitle: View = if target.kind == "song" && shell.catalog.is_downloaded(&target.id) {
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(4.0)
@@ -508,7 +505,7 @@ pub fn like_button(
     context: &mut ViewContext<Shell>,
 ) -> View {
     let (liked, id) = match song {
-        Some(song) => (shell.library.is_liked(&song.id), Some(song.id.clone())),
+        Some(song) => (shell.catalog.is_liked(&song.id), Some(song.id.clone())),
         None => (false, None),
     };
     let hovered = id
@@ -577,25 +574,35 @@ pub fn like_button(
 pub fn context_menu(
     target: &DetailsTarget,
     is_pinned: bool,
+    has_download: bool,
     context: &mut ViewContext<Shell>,
 ) -> Menu {
     let play_target = target.clone();
     let next_target = target.clone();
     let download_target = target.clone();
+    let delete_target = target.clone();
     let props_target = target.clone();
     let pin_target = target.clone();
+    let mut items = vec![
+        MenuItem::item("play", "Play"),
+        MenuItem::item("playnext", "Play next"),
+        MenuItem::item("download", "Download"),
+    ];
+    if has_download {
+        items.push(MenuItem::item("delete", "Delete download"));
+    }
+    items.push(MenuItem::item("properties", "Properties"));
+    items.push(MenuItem::item(
+        "pin",
+        if is_pinned { "Unpin" } else { "Pin" },
+    ));
     Menu::new(
-        [
-            MenuItem::item("play", "Play"),
-            MenuItem::item("playnext", "Play next"),
-            MenuItem::item("download", "Download"),
-            MenuItem::item("properties", "Properties"),
-            MenuItem::item("pin", if is_pinned { "Unpin" } else { "Pin" }),
-        ],
+        items,
         context.callback(move |label: String| match label.as_str() {
             "Play" => Message::MenuPlay(play_target.clone()),
             "Play next" => Message::MenuPlayNext(next_target.clone()),
             "Download" => Message::DownloadTarget(download_target.clone()),
+            "Delete download" => Message::DeleteDownload(delete_target.clone()),
             "Properties" => Message::MenuProperties(props_target.clone()),
             "Pin" | "Unpin" => Message::TogglePin(pin_target.clone()),
             _ => Message::Noop,
@@ -683,17 +690,14 @@ pub fn details_action_row(
     // a filled circle with a check; while downloading it is dimmed
     // and inert (progress shows on the art).
     let downloaded = if target.kind == "song" {
-        shell.downloads.is_downloaded(&target.id)
+        shell.catalog.is_downloaded(&target.id)
     } else {
-        shell
-            .downloads
-            .collection(&target.id)
-            .is_some_and(|c| c.status == crate::download::DownloadStatus::Completed)
+        shell.catalog.collection_complete(&target.id)
     };
     let downloading = if target.kind == "song" {
-        shell.downloads.is_downloading(&target.id)
+        shell.catalog.is_downloading(&target.id)
     } else {
-        shell.downloads.is_collection_downloading(&target.id)
+        shell.catalog.is_collection_downloading(&target.id)
     };
     let target_for_download = target.clone();
     let download_button = if downloaded {
@@ -746,7 +750,15 @@ pub fn details_action_row(
     // cause is isolated. This replaces the hand-built overlay menu
     // for this button — the overlay stays only for right-click,
     // which the native menu cannot do.
-    let is_pinned = shell.library.is_pinned(&target.kind, &target.id);
+    let is_pinned = shell.catalog.is_pinned(&target.kind, &target.id);
+    let has_download = if target.kind == "song" {
+        shell.catalog.is_downloaded(&target.id)
+    } else {
+        shell
+            .catalog
+            .collection_progress(&target.id)
+            .is_some_and(|(completed, _)| completed > 0)
+    };
     let more_button = Button::new()
         .content(
             SymbolIcon::new()
@@ -754,7 +766,7 @@ pub fn details_action_row(
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center),
         )
-        .menu(context_menu(target, is_pinned, context));
+        .menu(context_menu(target, is_pinned, has_download, context));
 
     let mut items: Vec<KeyedView> = vec![
         KeyedView::new("play", play_button),
@@ -916,8 +928,8 @@ pub fn song_row(
     let mut art_children: Vec<KeyedView> = vec![KeyedView::new("art", art_border)];
     // A downloading song shows a circular progress ring with a
     // download arrow in the middle, centered on the art.
-    if shell.downloads.is_downloading(&song.id) {
-        let fraction = shell.downloads.item_fraction(&song.id);
+    if shell.catalog.is_downloading(&song.id) {
+        let fraction = shell.catalog.item_fraction(&song.id);
         art_children.push(KeyedView::new(
             "download",
             download_progress_overlay(48.0, fraction),
@@ -957,7 +969,7 @@ pub fn song_row(
 
     // The subtitle (artist line). A downloaded song gets a filled
     // circle check at the start of the subtitle.
-    let subtitle: View = if shell.downloads.is_downloaded(&song.id) {
+    let subtitle: View = if shell.catalog.is_downloaded(&song.id) {
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(4.0)

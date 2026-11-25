@@ -36,7 +36,7 @@ pub fn view(
         .corner_radius(CornerRadius::uniform(4.0))
         .grid_column(0)
         .content(art_content);
-    let liked = shell.library.is_album_liked(&album.id);
+    let liked = shell.catalog.is_album_liked(&album.id);
     let meta = match (album.year, album.song_count) {
         (Some(year), Some(count)) => format!("{year} • {count} songs"),
         (Some(year), None) => format!("{year} • {} songs", content.songs.len()),
