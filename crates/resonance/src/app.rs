@@ -1,12 +1,9 @@
-//! The app shell: NavigationView sidebar (search box is the Search
-//! nav row), page content, and the bottom player bar. There is no
-//! custom title bar — the page fills the full client height and the
-//! window uses the standard system title bar.
+//! The app shell: TitleBar (header search), NavigationView sidebar,
+//! page content, and the bottom player bar.
 //!
 //! WinUI design notes (Windows app design guidelines):
 //! - NavigationView in Left mode is the shell's primary navigation.
-//! - The sidebar search box is the app's primary command: it is the
-//!   Search nav row, with live autocomplete suggestions.
+//! - The title bar hosts the search box — the app's primary command.
 //! - The bottom player bar is a persistent 96px media bar modeled on
 //!   Spotify's Now Playing bar: track info left, controls + progress
 //!   center, extras (lyrics, queue, volume) right.
@@ -16,7 +13,7 @@
 //! - Layout props (`margin`, `grid_row`, `grid_column`, `width`)
 //!   are set on the builder *before* the terminal `.content()` /
 //!   `.children()` / `.slots()` call, which returns a `View`.
-//! - Multi-slot controls (NavigationView, NavigationViewItem)
+//! - Multi-slot controls (TitleBar, NavigationView, NavigationViewItem)
 //!   take their content through `.slots([SlotView::new(...), ...])`.
 //! - `Image::source` returns `Result` (URI validation) — handle it.
 //! - `FontWeight` uses `BOLD` / `SEMI_BOLD` constants.
@@ -134,7 +131,9 @@ pub struct Shell {
 #[derive(Clone)]
 pub enum Message {
     Navigate(Page),
+    TogglePane,
     PaneOpenChanged(bool),
+    ToggleTheme,
     SearchTextChanged(String),
     SuggestionChosen(String),
     HomeLoaded(Result<LaunchData, String>),
@@ -374,42 +373,6 @@ fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
     )
 }
 
-/// The Search entry in the sidebar is a search box, not a plain
-/// nav row: an AutoSuggestBox with live suggestions. Clicking it
-/// selects the Search row (which navigates to the Search page) and
-/// typing searches live, exactly as the old title-bar box did. The
-/// input lives here now — not in a title bar, not on the Search
-/// page.
-fn search_nav_item(shell: &Shell, context: &mut ViewContext<Shell>) -> KeyedView {
-    KeyedView::new(
-        "search".to_string(),
-        NavigationViewItem::new()
-            .tag("search")
-            .is_selected(shell.page == Page::Search)
-            .selects_on_invoked(true)
-            .slots([
-                SlotView::new(
-                    NavigationViewItemSlot::Content,
-                    AutoSuggestBox::new()
-                        .text(shell.search_text.clone())
-                        .placeholder_text("Search songs, albums, artists...")
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .items_source(shell.search_suggestions.clone())
-                        .on_text_changed(
-                            context.callback(|value: String| Message::SearchTextChanged(value)),
-                        )
-                        .on_suggestion_chosen(
-                            context.callback(|value: String| Message::SuggestionChosen(value)),
-                        ),
-                ),
-                SlotView::new(
-                    NavigationViewItemSlot::Icon,
-                    SymbolIcon::new().symbol(Symbol::Find),
-                ),
-            ]),
-    )
-}
-
 impl Component for Shell {
     type Input = ();
     type Message = Message;
@@ -457,7 +420,16 @@ impl Component for Shell {
                 // Switching top-level pages leaves a details drill-in.
                 self.details = None;
             }
+            Message::TogglePane => self.pane_open = !self.pane_open,
             Message::PaneOpenChanged(open) => self.pane_open = open,
+            Message::ToggleTheme => {
+                self.settings.theme = match self.settings.theme {
+                    Theme::Dark => Theme::Light,
+                    Theme::Light => Theme::System,
+                    Theme::System => Theme::Dark,
+                };
+                self.settings.save();
+            }
             Message::SearchTextChanged(text) => {
                 self.search_text = text.clone();
                 // Typing searches whatever is typed, live: one
@@ -785,11 +757,40 @@ impl Component for Shell {
                 .backdrop(backdrop),
         );
 
-        // No custom title bar: the page (sidebar + content) fills
-        // the full client height, and the window uses the standard
-        // system title bar. The drill-in back button lives in the
-        // NavigationView header instead (see below); the theme
-        // switcher lives in Settings.
+        let theme_label = match self.settings.theme {
+            Theme::Dark => "Theme: Dark",
+            Theme::Light => "Theme: Light",
+            Theme::System => "Theme: System",
+        };
+
+        let on_drill_in = self.details.is_some() || self.page == Page::Queue;
+        let title_bar = TitleBar::new()
+            .preferred_height(WindowTitleBarHeight::Tall)
+            .title("Resonance")
+            .is_back_button_visible(on_drill_in)
+            .is_back_button_enabled(on_drill_in)
+            .on_back_requested(context.message(Message::Back))
+            .is_pane_toggle_button_visible(true)
+            .on_pane_toggle_requested(context.message(Message::TogglePane))
+            .slots([
+                SlotView::new(
+                    TitleBarSlot::Content,
+                    TextBox::new()
+                        .text(self.search_text.clone())
+                        .placeholder_text("Search songs, albums, artists...")
+                        .width(360.0)
+                        .on_text_changed(
+                            context.callback(|value: String| Message::SearchTextChanged(value)),
+                        ),
+                ),
+                SlotView::new(
+                    TitleBarSlot::RightHeader,
+                    Button::new()
+                        .on_click(context.message(Message::ToggleTheme))
+                        .content(theme_label),
+                ),
+            ]);
+
         let page_view: View = match self.page {
             Page::Home => pages::home::view(self, context),
             Page::Search => pages::search::view(self, context),
@@ -841,24 +842,12 @@ impl Component for Shell {
                     )),
             );
 
-        // The drill-in back button lives in the NavigationView
-        // header, above the page content (the title bar is gone).
-        // No drill-in, no button — an empty header takes no space.
-        let back_button: View = if self.details.is_some() || self.page == Page::Queue {
-            Button::new()
-                .margin(Thickness::new(24.0, 12.0, 0.0, 4.0))
-                .on_click(context.message(Message::Back))
-                .content("‹ Back")
-        } else {
-            TextBlock::new().text("").into()
-        };
-
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)
-            .is_pane_toggle_button_visible(true)
+            .is_pane_toggle_button_visible(false)
             .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
             .is_settings_visible(false)
-            .always_show_header(true)
+            .always_show_header(false)
             .is_pane_open(self.pane_open)
             .on_is_pane_open_changed(context.callback(Message::PaneOpenChanged))
             .on_selected_tag_changed(
@@ -876,14 +865,13 @@ impl Component for Shell {
                     _ => Message::Noop,
                 }),
             )
-            .grid_row(0)
+            .grid_row(1)
             .slots([
-                SlotView::new(NavigationViewSlot::Header, back_button),
                 SlotView::collection(
                     NavigationViewSlot::MenuItems,
                     vec![
                         nav_item("home", "Home", Symbol::Home, self.page == Page::Home),
-                        search_nav_item(self, context),
+                        nav_item("search", "Search", Symbol::Find, self.page == Page::Search),
                         nav_item(
                             "library",
                             "Library",
@@ -899,8 +887,12 @@ impl Component for Shell {
         let player_bar = self.player_bar(context);
 
         let shell_grid = Grid::new()
-            .rows([GridLength::Star(1.0), GridLength::Pixel(96.0)])
-            .children((navigation, player_bar));
+            .rows([
+                GridLength::Auto,
+                GridLength::Star(1.0),
+                GridLength::Pixel(96.0),
+            ])
+            .children((title_bar, navigation, player_bar));
 
         // Overlay layer (context menu / Properties dialog) sits in
         // the same root cell, painted above the shell. It only
@@ -1357,7 +1349,7 @@ impl Shell {
                 GridLength::Auto,
             ])
             .margin(8.0)
-            .grid_row(1)
+            .grid_row(2)
             .children((left, center, right))
     }
 }

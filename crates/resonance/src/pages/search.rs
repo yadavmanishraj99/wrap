@@ -1,13 +1,12 @@
-//! Search page: the full `search_all` result — top result, songs,
-//! albums, artists, playlists — each as a Home-style section of
-//! media cards. The search box itself lives in the sidebar (the
-//! Search nav row is the input); this page only shows results.
+//! Search page: live suggestions in an AutoSuggestBox plus the
+//! full `search_all` result — top result, songs, albums, artists,
+//! playlists — each as a Home-style section of media cards.
 //! Clicking a song card plays it; any other card opens its page.
 
 use saavnapi::{SearchAlbumHit, SearchArtistHit, SearchHit, SearchPlaylistHit};
 use windows_reactor::*;
 
-use crate::app::{DetailsTarget, Shell};
+use crate::app::{DetailsTarget, Message, Shell};
 use crate::views;
 
 fn song_subtitle(hit: &SearchHit) -> String {
@@ -25,6 +24,12 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     if shell.details.is_some() {
         return super::details::view(shell, context);
     }
+    let search_box = AutoSuggestBox::new()
+        .text(shell.search_text.clone())
+        .placeholder_text("Search songs, albums, artists, playlists...")
+        .items_source(shell.search_suggestions.clone())
+        .on_text_changed(context.callback(|value: String| Message::SearchTextChanged(value)))
+        .on_suggestion_chosen(context.callback(|value: String| Message::SuggestionChosen(value)));
 
     let content: View = if shell.search_loading {
         StackPanel::new().spacing(12.0).children((
@@ -148,7 +153,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         }
     } else {
         TextBlock::new()
-            .text("Type in the search box in the sidebar to find songs, albums and artists.")
+            .text("Type in the search box above to find songs, albums and artists.")
             .font_size(14.0)
             .opacity(0.7)
             .into()
@@ -160,6 +165,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .text("Search")
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
+            search_box,
             content,
         )),
     )

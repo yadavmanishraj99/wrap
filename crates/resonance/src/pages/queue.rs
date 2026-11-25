@@ -1,7 +1,7 @@
 //! Queue page: the current playback queue ("Up next"). Rows reuse
 //! `song_row`, so Play starts the queue at that song. Reached from
-//! the player bar's queue button; the back button in the
-//! NavigationView header returns to the page we came from.
+//! the player bar's queue button; the title-bar back button returns
+//! to the page we came from.
 
 use windows_reactor::*;
 
