@@ -8,6 +8,7 @@ use windows_reactor::*;
 
 use super::{album, artist, playlist, song};
 use crate::app::{Message, Shell};
+use crate::views;
 
 /// Details page root.
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
@@ -18,16 +19,19 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
             .into();
     };
     if details.loading {
-        return StackPanel::new().margin(24.0).spacing(12.0).children((
-            TextBlock::new()
-                .text(details.target.title.clone())
-                .font_size(28.0)
-                .font_weight(FontWeight::BOLD),
-            ProgressRing::new().is_active(true),
-            TextBlock::new()
-                .text("Loading details...")
-                .font_size(14.0)
-                .opacity(0.7),
+        // Skeleton: the details page's shape while it loads — a
+        // cover, title and subtitle bars, then song rows, shimmering.
+        let opacity = shell.skeleton_opacity();
+        return ScrollViewer::new().content(StackPanel::new().margin(24.0).spacing(12.0).children(
+            (
+                views::skeleton_art(200.0, opacity),
+                views::skeleton_bar(220.0, 28.0, opacity),
+                views::skeleton_bar(160.0, 14.0, opacity),
+                views::skeleton_row(opacity),
+                views::skeleton_row(opacity),
+                views::skeleton_row(opacity),
+                views::skeleton_row(opacity),
+            ),
         ));
     }
     if let Some(err) = &details.error {
@@ -60,5 +64,10 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         "song" => song::view(shell, context, &details.target, content),
         _ => playlist::view(shell, context, &details.target, content, "Playlist"),
     };
-    ScrollViewer::new().content(page)
+    // Loaded content fades in (opacity transition on the Border,
+    // driven by shell.details_fade).
+    Border::new()
+        .opacity(shell.details_fade)
+        .opacity_transition(std::time::Duration::from_millis(300))
+        .content(ScrollViewer::new().content(page))
 }

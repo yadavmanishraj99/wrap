@@ -32,12 +32,12 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         .on_suggestion_chosen(context.callback(|value: String| Message::SuggestionChosen(value)));
 
     let content: View = if shell.search_loading {
-        StackPanel::new().spacing(12.0).children((
-            ProgressRing::new().is_active(true),
-            TextBlock::new()
-                .text("Searching...")
-                .font_size(14.0)
-                .opacity(0.7),
+        // Skeleton: the results' shape while search_all loads —
+        // two section skeletons, shimmering.
+        let opacity = shell.skeleton_opacity();
+        StackPanel::new().spacing(32.0).children((
+            views::skeleton_section(opacity, 5),
+            views::skeleton_section(opacity, 5),
         ))
     } else if let Some(err) = &shell.search_error {
         TextBlock::new()
@@ -149,7 +149,12 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .opacity(0.7)
                 .into()
         } else {
-            StackPanel::new().spacing(32.0).keyed_children(sections)
+            // Results fade in (opacity transition on the Border,
+            // driven by shell.search_fade).
+            Border::new()
+                .opacity(shell.search_fade)
+                .opacity_transition(std::time::Duration::from_millis(300))
+                .content(StackPanel::new().spacing(32.0).keyed_children(sections))
         }
     } else {
         TextBlock::new()

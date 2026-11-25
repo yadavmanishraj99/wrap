@@ -35,16 +35,17 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         return super::details::view(shell, context);
     }
     let content: View = if shell.home_loading {
-        StackPanel::new().margin(24.0).spacing(12.0).children((
+        // Skeleton: the page's shape while launch data loads —
+        // heading plus three section skeletons, shimmering.
+        let opacity = shell.skeleton_opacity();
+        StackPanel::new().margin(24.0).spacing(32.0).children((
             TextBlock::new()
                 .text("Home")
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
-            ProgressRing::new().is_active(true),
-            TextBlock::new()
-                .text("Loading trending music...")
-                .font_size(14.0)
-                .opacity(0.7),
+            views::skeleton_section(opacity, 5),
+            views::skeleton_section(opacity, 5),
+            views::skeleton_section(opacity, 5),
         ))
     } else if let Some(err) = &shell.home_error {
         StackPanel::new().margin(24.0).spacing(12.0).children((
@@ -61,21 +62,33 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .content("Retry"),
         ))
     } else if let Some(home) = &shell.home {
-        StackPanel::new().margin(24.0).spacing(32.0).children((
-            TextBlock::new()
-                .text("Home")
-                .font_size(28.0)
-                .font_weight(FontWeight::BOLD),
-            views::card_section("Trending now", &targets(&home.new_trending), shell, context),
-            views::card_section(
-                "Top playlists",
-                &targets(&home.top_playlists),
-                shell,
-                context,
-            ),
-            views::card_section("New albums", &targets(&home.new_albums), shell, context),
-            views::card_section("Charts", &targets(&home.charts), shell, context),
-        ))
+        // Loaded content fades in (opacity transition on the Border,
+        // driven by shell.home_fade: 0 on arrival, 1 a beat later).
+        Border::new()
+            .opacity(shell.home_fade)
+            .opacity_transition(std::time::Duration::from_millis(300))
+            .content(
+                StackPanel::new().margin(24.0).spacing(32.0).children((
+                    TextBlock::new()
+                        .text("Home")
+                        .font_size(28.0)
+                        .font_weight(FontWeight::BOLD),
+                    views::card_section(
+                        "Trending now",
+                        &targets(&home.new_trending),
+                        shell,
+                        context,
+                    ),
+                    views::card_section(
+                        "Top playlists",
+                        &targets(&home.top_playlists),
+                        shell,
+                        context,
+                    ),
+                    views::card_section("New albums", &targets(&home.new_albums), shell, context),
+                    views::card_section("Charts", &targets(&home.charts), shell, context),
+                )),
+            )
     } else {
         TextBlock::new()
             .text("Nothing here yet.")

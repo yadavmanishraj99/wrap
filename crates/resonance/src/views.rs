@@ -421,3 +421,97 @@ pub fn song_row(
                 .content(SymbolIcon::new().symbol(Symbol::Play)),
         ))
 }
+
+// ---------------------------------------------------------------------------
+// Skeleton loading shapes.
+//
+// A skeleton is a set of rounded placeholder bars in the theme's card
+// color, the same size and layout as the content that will replace
+// it. The shimmer is a pulse: the Shell flips its skeleton phase on
+// a timer (Message::SkeletonPulse) and every skeleton fill's opacity
+// follows it — the 300ms opacity transition on each fill makes the
+// change a smooth fade instead of a snap. Reactor 0.100 exposes no
+// Storyboard or ContentThemeTransition, so this timer + implicit
+// transition is the animation primitive available.
+// ---------------------------------------------------------------------------
+
+/// Skeleton fill opacity, bright phase of the shimmer.
+pub const SKELETON_BRIGHT: f64 = 0.85;
+/// Skeleton fill opacity, dim phase of the shimmer.
+pub const SKELETON_DIM: f64 = 0.45;
+
+/// A rounded placeholder bar (a line of text, a heading, a button).
+pub fn skeleton_bar(width: f64, height: f64, opacity: f64) -> View {
+    Border::new()
+        .width(width)
+        .height(height)
+        .corner_radius(CornerRadius::uniform(height / 2.0))
+        .background(Brush::Theme(ThemeBrush::CardBackground))
+        .opacity(opacity)
+        .opacity_transition(std::time::Duration::from_millis(300))
+        .into()
+}
+
+/// A square placeholder for artwork (a card image, a details-page
+/// cover). `size` is the side length; corners are rounded 4px, the
+/// same as the real artwork it stands in for.
+pub fn skeleton_art(size: f64, opacity: f64) -> View {
+    Border::new()
+        .width(size)
+        .height(size)
+        .corner_radius(CornerRadius::uniform(4.0))
+        .background(Brush::Theme(ThemeBrush::CardBackground))
+        .opacity(opacity)
+        .opacity_transition(std::time::Duration::from_millis(300))
+        .into()
+}
+
+/// A media-card-shaped skeleton: 168px art + title + subtitle bars,
+/// same size and spacing as a real card.
+pub fn skeleton_card(opacity: f64) -> View {
+    StackPanel::new().spacing(8.0).children((
+        skeleton_art(168.0, opacity),
+        skeleton_bar(120.0, 12.0, opacity),
+        skeleton_bar(84.0, 10.0, opacity),
+    ))
+}
+
+/// A song-row-shaped skeleton: 48px art + title/artist bars.
+pub fn skeleton_row(opacity: f64) -> View {
+    StackPanel::new()
+        .orientation(Orientation::Horizontal)
+        .spacing(12.0)
+        .margin(4.0)
+        .children((
+            Border::new()
+                .width(48.0)
+                .height(48.0)
+                .corner_radius(CornerRadius::uniform(4.0))
+                .background(Brush::Theme(ThemeBrush::CardBackground))
+                .opacity(opacity)
+                .opacity_transition(std::time::Duration::from_millis(300)),
+            StackPanel::new()
+                .vertical_alignment(VerticalAlignment::Center)
+                .spacing(8.0)
+                .children((
+                    skeleton_bar(180.0, 12.0, opacity),
+                    skeleton_bar(120.0, 10.0, opacity),
+                )),
+        ))
+}
+
+/// A section-shaped skeleton: heading bar + one row of `cards`
+/// skeleton cards, 12px apart — the same shape as a real section.
+pub fn skeleton_section(opacity: f64, cards: usize) -> View {
+    let mut card_views: Vec<KeyedView> = Vec::new();
+    for i in 0..cards {
+        card_views.push(KeyedView::new(format!("card{i}"), skeleton_card(opacity)));
+    }
+    StackPanel::new().spacing(8.0).children((
+        skeleton_bar(160.0, 20.0, opacity),
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(12.0)
+            .keyed_children(card_views),
+    ))
+}

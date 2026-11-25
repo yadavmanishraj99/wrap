@@ -109,6 +109,17 @@ pub struct Shell {
     pub properties: Option<PropertiesState>,
     /// The Now Playing sidebar on the right is open.
     pub now_playing_open: bool,
+    /// Skeleton shimmer phase (true = dim). Flipped by the
+    /// SkeletonPulse timer while any page is loading.
+    pub skeleton_dim: bool,
+    /// The skeleton pulse timer is running.
+    pub skeleton_pulse_running: bool,
+    /// Fade-in opacity for just-loaded content (0 on arrival, then
+    /// animated to 1 — the content Border's opacity transition does
+    /// the fade).
+    pub home_fade: f64,
+    pub search_fade: f64,
+    pub details_fade: f64,
     pub pane_open: bool,
     pub search_text: String,
     pub search_suggestions: Vec<String>,
@@ -147,6 +158,10 @@ pub enum Message {
     Seek(f64),
     VolumeChanged(f64),
     Tick,
+    SkeletonPulse,
+    HomeFadeIn,
+    SearchFadeIn,
+    DetailsFadeIn,
     ToggleLike(Song),
     ToggleLikeAlbum(Album),
     ToggleLikePlaylist(Playlist),
@@ -362,6 +377,26 @@ fn spawn_tick(context: &ComponentContext<Shell>) {
     });
 }
 
+/// One shimmer step: sleeps, then flips the skeleton phase. The
+/// SkeletonPulse handler re-spawns this while anything is loading.
+fn spawn_skeleton_pulse(context: &ComponentContext<Shell>) {
+    context.spawn_background(move |_| {
+        std::thread::sleep(Duration::from_millis(650));
+        Message::SkeletonPulse
+    });
+}
+
+/// A beat after content arrives, raise its fade to 1 so the page
+/// Border's opacity transition animates the fade-in. The short sleep
+/// lets the opacity-0 frame actually paint first, so the transition
+/// sees a real change.
+fn spawn_fade_in(context: &ComponentContext<Shell>, message: Message) {
+    context.spawn_background(move |_| {
+        std::thread::sleep(Duration::from_millis(30));
+        message
+    });
+}
+
 fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
     KeyedView::new(
         tag.to_string(),
@@ -386,8 +421,10 @@ impl Component for Shell {
         let player = Player::new();
         player.set_volume(settings.volume);
 
-        // Home data loads in the background as the shell opens.
+        // Home data loads in the background as the shell opens, so
+        // the skeleton shimmer starts with it.
         spawn_home_load(context);
+        spawn_skeleton_pulse(context);
 
         Self {
             page: Page::Home,
@@ -397,6 +434,11 @@ impl Component for Shell {
             menu: None,
             properties: None,
             now_playing_open: false,
+            skeleton_dim: false,
+            skeleton_pulse_running: true,
+            home_fade: 1.0,
+            search_fade: 1.0,
+            details_fade: 1.0,
             pane_open: true,
             search_text: String::new(),
             search_suggestions: Vec::new(),
@@ -452,6 +494,7 @@ impl Component for Shell {
                     }
                     self.search_loading = true;
                     self.search_error = None;
+                    self.ensure_skeleton_pulse(context);
                     context.spawn_background(move |_| {
                         let result = data::runtime_handle()
                             .block_on(async { data::client().search_all(&query).await });
@@ -471,7 +514,14 @@ impl Component for Shell {
             Message::HomeLoaded(result) => {
                 self.home_loading = false;
                 match result {
-                    Ok(data) => self.home = Some(data),
+                    Ok(data) => {
+                        self.home = Some(data);
+                        // Content arrives invisible and fades in (the
+                        // page Border's opacity transition animates
+                        // the 0 -> 1 change a beat later).
+                        self.home_fade = 0.0;
+                        spawn_fade_in(context, Message::HomeFadeIn);
+                    }
                     Err(err) => self.home_error = Some(err),
                 }
             }
@@ -488,6 +538,8 @@ impl Component for Shell {
                                 .take(8)
                                 .collect();
                             self.search_all = Some(all);
+                            self.search_fade = 0.0;
+                            spawn_fade_in(context, Message::SearchFadeIn);
                         }
                         Err(err) => self.search_error = Some(err),
                     }
@@ -634,6 +686,25 @@ impl Component for Shell {
                     spawn_tick(context);
                 }
             }
+            Message::SkeletonPulse => {
+                // Flip the shimmer phase; keep the loop going only
+                // while a skeleton is still on screen.
+                self.skeleton_dim = !self.skeleton_dim;
+                if self.any_loading() {
+                    spawn_skeleton_pulse(context);
+                } else {
+                    self.skeleton_pulse_running = false;
+                }
+            }
+            Message::HomeFadeIn => {
+                self.home_fade = 1.0;
+            }
+            Message::SearchFadeIn => {
+                self.search_fade = 1.0;
+            }
+            Message::DetailsFadeIn => {
+                self.details_fade = 1.0;
+            }
             Message::ToggleLike(song) => {
                 self.library.toggle_like(song);
             }
@@ -653,7 +724,11 @@ impl Component for Shell {
                 if let Some(details) = &mut self.details {
                     details.loading = false;
                     match result {
-                        Ok(content) => details.content = Some(content),
+                        Ok(content) => {
+                            details.content = Some(content);
+                            self.details_fade = 0.0;
+                            spawn_fade_in(context, Message::DetailsFadeIn);
+                        }
                         Err(err) => details.error = Some(err),
                     }
                 }
@@ -741,6 +816,7 @@ impl Component for Shell {
             Message::RetryHome => {
                 self.home_loading = true;
                 self.home_error = None;
+                self.ensure_skeleton_pulse(context);
                 spawn_home_load(context);
             }
             Message::Noop => {}
@@ -1097,6 +1173,7 @@ impl Shell {
             error: None,
             content: None,
         });
+        self.ensure_skeleton_pulse(context);
         spawn_details_load(context, target);
     }
 
@@ -1122,6 +1199,7 @@ impl Shell {
         self.details = None;
         self.search_loading = true;
         self.search_error = None;
+        self.ensure_skeleton_pulse(context);
         context.spawn_background(move |_| {
             let result =
                 data::runtime_handle().block_on(async { data::client().search_all(&query).await });
@@ -1130,6 +1208,30 @@ impl Shell {
     }
 
     /// Shared bookkeeping after Next/Previous/auto-advance.
+    /// True while any page is showing a skeleton.
+    fn any_loading(&self) -> bool {
+        self.home_loading || self.search_loading || self.details.as_ref().is_some_and(|d| d.loading)
+    }
+
+    /// Start the skeleton shimmer if it isn't already running and
+    /// something is loading. Several load sites share the one loop;
+    /// it stops itself when nothing is loading.
+    fn ensure_skeleton_pulse(&mut self, context: &ComponentContext<Self>) {
+        if !self.skeleton_pulse_running && self.any_loading() {
+            self.skeleton_pulse_running = true;
+            spawn_skeleton_pulse(context);
+        }
+    }
+
+    /// The skeleton fills' current opacity (the shimmer phase).
+    pub fn skeleton_opacity(&self) -> f64 {
+        if self.skeleton_dim {
+            views::SKELETON_DIM
+        } else {
+            views::SKELETON_BRIGHT
+        }
+    }
+
     fn after_track_change(&mut self, context: &ComponentContext<Self>) {
         if let Some(song) = self.player.current() {
             self.library.push_recent(song.clone());
