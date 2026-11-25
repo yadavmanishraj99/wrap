@@ -366,17 +366,20 @@ fn hover_button(
         .content(SymbolIcon::new().symbol(icon))
 }
 
-/// A small circular like button: Add (plus) when not liked,
-/// Favorite (heart) when liked. The circle is 24px; the icon inside
-/// is ~16px. The circle is an outline (a 1px border), not a filled
-/// background — the background stays transparent. The icon and the
-/// outline are greyish when the pointer is not over the button (low
-/// opacity) and go to full contrast on hover. They use the theme's
-/// foreground and stroke colors, dimmed by opacity, so they read as
-/// grey in both dark mode (white dimmed over the dark page) and
-/// light mode (black dimmed over the light page) — no hardcoded
-/// grey that would vanish on one theme. `None` renders an inert
-/// greyed-out Add (no song to like yet).
+/// A small circular like button. When not liked, it is Add (plus)
+/// inside a 24px circle outline (a 1px border, transparent
+/// background); the icon is ~16px. When already liked, it is a check
+/// inside a filled circle, the fill being the framework's primary
+/// color (Accent — the same primary the play button uses; #1ed760
+/// Spotify green is the fallback if the framework ever stopped
+/// providing one). The not-liked button is greyish when the pointer
+/// is not over it (low opacity) and goes to full contrast on hover;
+/// the liked button is always full contrast, so the liked state is
+/// unmistakable. The colors use the theme's foreground and stroke,
+/// dimmed by opacity, so they read in both dark mode (white dimmed
+/// over the dark page) and light mode (black dimmed over the light
+/// page) — no hardcoded grey that would vanish on one theme.
+/// `None` renders an inert greyed-out Add (no song to like yet).
 pub fn like_button(
     song: Option<&Song>,
     grid_column: i32,
@@ -390,16 +393,28 @@ pub fn like_button(
     let hovered = id
         .as_deref()
         .is_some_and(|id| shell.hovered_like.as_deref() == Some(id));
+    // Liked: a check inside a filled circle, the fill being the
+    // framework's primary color (Accent). Not liked: a plus inside a
+    // circle outline (1px border, transparent background). The liked
+    // button is always full contrast; the not-liked one is greyish
+    // until hovered.
     let mut border = Border::new()
         .width(24.0)
         .height(24.0)
         .corner_radius(CornerRadius::uniform(12.0))
-        .background(Brush::Solid(Color::transparent()))
-        .border_thickness(1.0)
-        .border_brush(Brush::Theme(ThemeBrush::CardStroke))
-        .opacity(if hovered { 1.0 } else { 0.55 })
+        .background(if liked {
+            Brush::Theme(ThemeBrush::Accent)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .opacity(if liked || hovered { 1.0 } else { 0.55 })
         .margin(4.0)
         .grid_column(grid_column);
+    if !liked {
+        border = border
+            .border_thickness(1.0)
+            .border_brush(Brush::Theme(ThemeBrush::CardStroke));
+    }
     if let Some(song) = song {
         let hover_id = song.id.clone();
         let press_song = song.clone();
@@ -419,7 +434,7 @@ pub fn like_button(
     border
         .content(
             SymbolIcon::new()
-                .symbol(if liked { Symbol::Favorite } else { Symbol::Add })
+                .symbol(if liked { Symbol::Accept } else { Symbol::Add })
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center),
         )
