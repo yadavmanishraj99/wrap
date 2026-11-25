@@ -1820,6 +1820,12 @@ impl Shell {
         let repeat_on = self.settings.repeat != RepeatMode::Off;
         let center = StackPanel::new()
             .spacing(2.0)
+            // A fixed width so the progress bar has room: the middle
+            // column is Auto, so without this it shrinks to the
+            // controls row (~200px) and the seek slider ends up
+            // tiny. 520px gives the slider a proper length while
+            // the controls stay centered in the window.
+            .width(520.0)
             .vertical_alignment(VerticalAlignment::Center)
             .margin(8.0)
             .grid_column(1)
@@ -1880,12 +1886,13 @@ impl Shell {
                         ),
                     )),
                 // The progress row: elapsed time, a seek slider, and
-                // total time. The row is inset from the sides so the
-                // slider is a little narrower, and each timer has a
-                // gap to the slider so the times never stick to it.
+                // total time. The row is inset a little from the
+                // sides so the slider is just a touch narrower, and
+                // each timer has a gap to the slider so the times
+                // never stick to it.
                 Grid::new()
                     .columns([GridLength::Auto, GridLength::Star(1.0), GridLength::Auto])
-                    .margin(Thickness::new(16.0, 0.0, 16.0, 0.0))
+                    .margin(Thickness::new(8.0, 0.0, 8.0, 0.0))
                     .children((
                         TextBlock::new()
                             .text(views::fmt_time(self.position))
