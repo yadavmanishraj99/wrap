@@ -293,7 +293,16 @@ pub fn media_card(
     let hover_id = target.id.clone();
     Border::new()
         .width(size)
-        .background(Brush::Solid(Color::transparent()))
+        // A navigation-like hover background: a card fill while the
+        // card is hovered (or its menu is open), transparent
+        // otherwise. The card already shows Play/More buttons on
+        // hover; the background makes the hover state unmistakable.
+        .background(if hovered || menu_open {
+            Brush::Theme(ThemeBrush::CardBackground)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .corner_radius(CornerRadius::uniform(8.0))
         .on_pointer_entered(
             context.callback(move |_info: PointerEventInfo| {
                 Message::CardHover(Some(hover_id.clone()))
@@ -357,17 +366,25 @@ fn hover_button(
         .content(SymbolIcon::new().symbol(icon))
 }
 
-/// One song row: artwork, title/artist, duration, like button.
-/// `queue` is the full list the row belongs to, so Play starts the
-/// queue at this song's position. The title and the artist line each
-/// wrap to at most 2 lines, the same rule as the media cards. On
-/// hover, a circular play icon appears over the art (the same hover
-/// affordance as the media cards); clicking it plays the song. There
-/// is no permanent Play button at the right end — the hover icon is
-/// the play affordance.
+/// One song row: artwork, title/artist, and — unless `compact` —
+/// a favorite button and the duration. `queue` is the full list the
+/// row belongs to, so Play starts the queue at this song's position.
+/// The title and the artist line each wrap to at most 2 lines, the
+/// same rule as the media cards. The row gets a navigation-like
+/// hover background (a card fill while hovered). On hover, a circular
+/// play icon appears over the art (the same hover affordance as the
+/// media cards); clicking it plays the song. There is no permanent
+/// Play button — the hover icon is the play affordance.
+///
+/// In the full (details) form, the favorite button sits before the
+/// duration, with a gap between them, and only shows while the row
+/// is hovered. In the compact form (the Now Playing queue), there is
+/// no favorite button and no duration — just art, title/artist, and
+/// the hover background.
 pub fn song_row(
     song: &Song,
     queue: &[Song],
+    compact: bool,
     shell: &Shell,
     context: &mut ViewContext<Shell>,
 ) -> View {
@@ -427,9 +444,83 @@ pub fn song_row(
         .grid_column(0)
         .keyed_children(art_children);
 
+    let title_panel = StackPanel::new()
+        .margin(12.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(1)
+        .children((
+            TextBlock::new()
+                .text(song.name.clone())
+                .font_size(14.0)
+                .font_weight(FontWeight::SEMI_BOLD)
+                .text_wrapping(TextWrapping::Wrap)
+                .max_lines(2),
+            TextBlock::new()
+                .text(artist_names(song))
+                .font_size(12.0)
+                .opacity(0.7)
+                .text_wrapping(TextWrapping::Wrap)
+                .max_lines(2),
+        ));
+    // The full form: favorite before the duration, with a gap
+    // between them, and the favorite only shows while hovered. The
+    // compact form (Now Playing queue) has neither.
+    let (columns, row_children): (Vec<GridLength>, Vec<KeyedView>) = if compact {
+        (
+            vec![GridLength::Pixel(48.0), GridLength::Star(1.0)],
+            vec![
+                KeyedView::new("art", art_view),
+                KeyedView::new("title", title_panel),
+            ],
+        )
+    } else {
+        let mut children = vec![
+            KeyedView::new("art", art_view),
+            KeyedView::new("title", title_panel),
+        ];
+        if hovered {
+            children.push(KeyedView::new(
+                "favorite",
+                Button::new()
+                    .margin(Thickness::new(4.0, 4.0, 8.0, 4.0))
+                    .grid_column(2)
+                    .on_click(context.message(Message::ToggleLike(song.clone())))
+                    .content(SymbolIcon::new().symbol(if liked {
+                        Symbol::Favorite
+                    } else {
+                        Symbol::Add
+                    })),
+            ));
+        }
+        children.push(KeyedView::new(
+            "duration",
+            TextBlock::new()
+                .text(duration)
+                .font_size(12.0)
+                .opacity(0.7)
+                .vertical_alignment(VerticalAlignment::Center)
+                .margin(12.0)
+                .grid_column(3),
+        ));
+        (
+            vec![
+                GridLength::Pixel(48.0),
+                GridLength::Star(1.0),
+                GridLength::Auto,
+                GridLength::Auto,
+            ],
+            children,
+        )
+    };
+
     let hover_id = song.id.clone();
     Border::new()
-        .background(Brush::Solid(Color::transparent()))
+        .background(if hovered {
+            Brush::Theme(ThemeBrush::CardBackground)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .corner_radius(CornerRadius::uniform(4.0))
         .on_pointer_entered(
             context.callback(move |_info: PointerEventInfo| {
                 Message::CardHover(Some(hover_id.clone()))
@@ -438,50 +529,9 @@ pub fn song_row(
         .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::CardHover(None)))
         .content(
             Grid::new()
-                .columns([
-                    GridLength::Pixel(48.0),
-                    GridLength::Star(1.0),
-                    GridLength::Auto,
-                    GridLength::Auto,
-                ])
+                .columns(columns)
                 .margin(4.0)
-                .children((
-                    art_view,
-                    StackPanel::new()
-                        .margin(12.0)
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .grid_column(1)
-                        .children((
-                            TextBlock::new()
-                                .text(song.name.clone())
-                                .font_size(14.0)
-                                .font_weight(FontWeight::SEMI_BOLD)
-                                .text_wrapping(TextWrapping::Wrap)
-                                .max_lines(2),
-                            TextBlock::new()
-                                .text(artist_names(song))
-                                .font_size(12.0)
-                                .opacity(0.7)
-                                .text_wrapping(TextWrapping::Wrap)
-                                .max_lines(2),
-                        )),
-                    TextBlock::new()
-                        .text(duration)
-                        .font_size(12.0)
-                        .opacity(0.7)
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .margin(12.0)
-                        .grid_column(2),
-                    Button::new()
-                        .margin(4.0)
-                        .grid_column(3)
-                        .on_click(context.message(Message::ToggleLike(song.clone())))
-                        .content(SymbolIcon::new().symbol(if liked {
-                            Symbol::Favorite
-                        } else {
-                            Symbol::Add
-                        })),
-                )),
+                .keyed_children(row_children),
         )
 }
 

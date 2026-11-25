@@ -112,7 +112,7 @@ pub fn view(
             .map(|song| {
                 KeyedView::new(
                     song.id.clone(),
-                    views::song_row(song, &content.songs, shell, context),
+                    views::song_row(song, &content.songs, false, shell, context),
                 )
             })
             .collect();

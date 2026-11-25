@@ -2244,7 +2244,7 @@ impl Shell {
             for (i, song) in queue.iter().enumerate() {
                 song_rows.push(KeyedView::new(
                     format!("{i}-{}", song.id),
-                    views::song_row(song, &queue, self, context),
+                    views::song_row(song, &queue, true, self, context),
                 ));
             }
         }
