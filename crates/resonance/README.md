@@ -235,8 +235,18 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Queue | Live — the queue panel over the Now Playing sidebar (from its Show full queue button); playing a row starts the queue there; song titles wrap |
 | Now Playing | Live — an opaque 340px sidebar on the right (a solid fill, so the page never bleeds through it). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which appears at once; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |
 | Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
-| Library | Live — liked songs, recently played, liked albums/playlists/artists (persisted locally), all as Home-style media-card sections; albums, playlists and artists land here via the Like button on their pages |
+| Library | Live — liked songs, recently played, liked albums/playlists/artists (persisted locally), all as Home-style media-card sections; albums, playlists and artists land here via the Like button on their pages. **Downloads** (auto-playlist of individually downloaded songs) and **Downloaded artists** (one playlist per downloaded artist, holding their top songs) also live here |
 | Settings | Live — theme, window material (Acrylic default), stream quality, autoplay, about |
+
+## Downloads
+
+Live — a song, album, playlist or artist can be downloaded for offline listening:
+
+- **Where the button is:** album / playlist / artist / song pages have a Download button in the action row; everywhere else (media cards, song rows, pinned rows) Download lives in the context menu (right-click, or the More button). The details-page button also shows the download state (a filled check once downloaded, dimmed while downloading).
+- **What downloads:** a single song goes into the auto **Downloads** playlist in the Library. A full album / playlist downloads every song into a folder named after it. An artist downloads their top songs and creates a playlist for them under the artist's name (**Downloaded artists** in the Library). Files go to `%USERPROFILE%\Music\Resonance` (a collection gets its own subfolder), named `Artist - Title.mp3`, at the quality set in Settings.
+- **Progress:** a downloading song shows a circular progress ring with a download arrow in the middle, centered on its art (song rows and media cards). A downloading collection shows its overall progress ("Downloading X of Y songs" + a bar) above the song list on its page, while each song row shows its own progress on its art. A song downloaded on its own shows progress only on itself — the collection page shows nothing. A downloaded song gets a filled circle check at the start of its subtitle (song rows and media cards).
+- **Resilience:** downloads write to a `.part` file and resume from it (HTTP `Range`) after a failure or an app restart, retrying up to 3 times with a backoff. The queue is persisted in SQLite (`%LOCALAPPDATA%\Resonance\resonance.db`, tables `downloads` + `collections`), so an interrupted download resumes on the next launch.
+- **Not done yet:** minimizing to the system tray when the app is closed while a download is running. Reactor exposes no window-close event, so a proper minimize-to-tray needs Win32 window subclassing that cannot be verified from the Linux build machine. Closing the app mid-download is safe regardless — the partial file and queue are persisted, and the download resumes on the next launch.
 
 ## Layout
 
@@ -246,6 +256,8 @@ crates/resonance/src/
   app.rs      Shell component: state, messages, TitleBar +
               NavigationView + player bar, player polling
   data.rs     shared tokio runtime + saavnapi client
+  download.rs download engine + SQLite queue (resonance.db),
+              resume (.part + Range) + retry, Downloads playlist
   player.rs   MediaPlayer wrapper: queue, play/pause/seek/volume,
               shuffle-upcoming, repeat wrap/restart
   store.rs    Library + Settings persistence (%LOCALAPPDATA%),
@@ -256,6 +268,8 @@ crates/resonance/src/
   pages/      home.rs, details.rs, queue.rs, search.rs, library.rs,
               settings.rs
 ```
+
+**Build note (SQLite):** downloads use `rusqlite` with the `bundled` SQLite C library. That C code needs an MSVC toolchain, which the Linux build machine does not have — so on Linux, verify with the MinGW cross-compiler against the GNU target (`CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar cargo check -p resonance --target x86_64-pc-windows-gnu`; the target needs `rustup target add x86_64-pc-windows-gnu` first). The user's Windows `cargo run` (MSVC) compiles the bundled SQLite normally.
 
 ## Design
 
