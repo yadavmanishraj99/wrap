@@ -1368,7 +1368,12 @@ impl Component for Shell {
             .rows([
                 GridLength::Auto,
                 GridLength::Star(1.0),
-                GridLength::Pixel(96.0),
+                // 112px, so the 40px play/pause button plus the
+                // progress row below it are never clipped. The bar
+                // was 96px and the play button was still being cut —
+                // the controls row plus the seek row plus the center
+                // column's margins need more than 96px.
+                GridLength::Pixel(112.0),
             ])
             .keyed_children(shell_children);
 

@@ -33,7 +33,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   Home, Search, Library, Settings, with icons and pane toggle.
 - **Header search** — search box in the custom `TitleBar`; Enter
   (magnifier button) runs a song search and opens the Search page.
-- **Bottom player bar** — 96px persistent bar modeled on Spotify's
+- **Bottom player bar** — 112px persistent bar modeled on Spotify's
   Now Playing bar, three zones: track info left (56px art, title on
   one line with an ellipsis, up to two lines of clickable artist
   names — each opens that artist's page — a small circular
