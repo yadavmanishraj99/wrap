@@ -145,6 +145,9 @@ impl SaavnClient {
 
     /// The `useFetch` equivalent: build the URL, GET it, parse JSON.
     /// Returns the whole parsed body as `Value` — callers map it.
+    /// HTML entities in string values are decoded first (the API
+    /// escapes display text: `&amp;`, `&quot;`, `&#39;`, ...), so
+    /// models always carry display-ready text.
     pub(crate) async fn fetch(
         &self,
         call: &str,
@@ -175,7 +178,9 @@ impl SaavnClient {
         if !status.is_success() {
             return Err(Error::HttpStatus(status));
         }
-        Ok(response.json::<Value>().await?)
+        let mut body = response.json::<Value>().await?;
+        crate::entities::decode_entities(&mut body);
+        Ok(body)
     }
 
     /// Extract the token (last path segment) from a JioSaavn link.

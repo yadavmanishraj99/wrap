@@ -33,20 +33,26 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   Home, Search, Library, Settings, with icons and pane toggle.
 - **Header search** — search box in the custom `TitleBar`; Enter
   (magnifier button) runs a song search and opens the Search page.
-- **Bottom player bar** — 90px persistent bar modeled on Spotify's
-  Now Playing bar, three zones: track info left (56px art, title /
-  artist, add-to-liked button), controls + progress stacked center
-  (shuffle, previous, large filled circular play/pause, next,
-  repeat; elapsed / seek slider / duration below), extras right
-  (lyrics, queue, mute + volume slider). Track title and artist
-  wrap instead of clipping with an ellipsis.
+- **Bottom player bar** — 96px persistent bar modeled on Spotify's
+  Now Playing bar, three zones: track info left (56px art, title on
+  one line with an ellipsis, up to two lines of clickable artist
+  names — each opens that artist's page — add-to-liked button),
+  controls + progress stacked center (shuffle, previous, large
+  filled circular play/pause, next, repeat; elapsed / seek slider /
+  duration below), extras right (lyrics, queue, mute + volume
+  slider). Nothing in the bar clips: the bar is tall enough for the
+  two-line artist area and the progress row.
 - **Search** — typing in the header search field searches whatever
   is typed, live: one `search_all` call per keystroke feeds both the
   autocomplete suggestions and the full results, and typing takes
   you to the Search page. Picking a suggestion searches it too.
+  Results render as Home-style media-card sections (Top result,
+  Songs, Albums, Artists, Playlists).
 - **Sidebar** — Home, Search, Library at the top; Settings pinned
   to the very bottom (pane footer — 0.100 has no FooterMenuItems
-  slot, so it is a Button in the PaneFooter slot). No pane title,
+  slot, so it is a Border with a pointer-press handler in the
+  PaneFooter slot; a Button there never answered its click).
+  Selected state is a card-background fill. No pane title,
   and the title bar shows no current-page text: just the app title,
   the search field, and the theme toggle (no search icon button).
 - **Playback** — `MediaPlayer` plays saavnapi stream URLs at the
@@ -63,8 +69,9 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   song's details page, which shows its lyrics when the API has them.
   No connect-to-device, miniplayer, or fullscreen: windows-reactor
   0.100 exposes no API for them.
-- **Persistence** — liked songs and recents, plus settings, saved as
-  JSON under `%LOCALAPPDATA%\Resonance`.
+- **Persistence** — liked songs, albums and playlists, plus
+  recents and settings, saved as JSON under
+  `%LOCALAPPDATA%\Resonance`.
 - **Theme** — Dark / Light / System toggle in the title bar
   (dark-first, matching the Resonance design system).
 - **Window material** — Mica (default), Mica Alt, Acrylic, or Solid,
@@ -81,11 +88,11 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 
 | Page | Status |
 | --- | --- |
-| Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties) |
-| Details | Live — opened by clicking any Home card: artwork, title, subtitle, Play, song list, lyrics for songs when available; title-bar back button returns |
+| Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties). Clicking a song card plays it; any other card opens its page |
+| Details | Live — one page per kind, each with its own layout: Artist (circular art, followers, Play, Top songs, Top albums, Similar artists), Album (art, clickable artist names, year • songs, Play, Like), Playlist / Chart (art, description, Play, Like), Song (art, clickable artists, Play, Like, lyrics when available); title-bar back button returns. Song cards never open this page — they just play |
 | Queue | Live — current playback queue from the player bar; playing a row starts the queue there; song titles wrap |
-| Search | Live — typing searches the typed text live (results + autocomplete from one call), Top result, Songs, Albums, Artists, Playlists |
-| Library | Live — liked songs, recently played, liked albums/playlists (persisted locally) |
+| Search | Live — typing searches the typed text live (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
+| Library | Live — liked songs, recently played, liked albums/playlists (persisted locally), all as Home-style media-card sections; albums and playlists land here via the Like button on their pages |
 | Settings | Live — theme, window material (Mica default), stream quality, volume, autoplay, about |
 
 ## Layout
@@ -100,8 +107,9 @@ crates/resonance/src/
               shuffle-upcoming, repeat wrap/restart
   store.rs    Library + Settings persistence (%LOCALAPPDATA%),
               incl. shuffle + repeat mode
-  views.rs    shared bits: song row, media card, section header,
-              formatting
+  views.rs    shared bits: song row, media card, card section
+              (Home/Search/Library layout), clickable artist links,
+              section header, formatting
   pages/      home.rs, details.rs, queue.rs, search.rs, library.rs,
               settings.rs
 ```

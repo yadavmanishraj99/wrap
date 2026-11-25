@@ -52,6 +52,7 @@ pub mod chrome;
 pub mod client;
 pub mod collections;
 pub mod discovery;
+mod entities;
 pub mod error;
 pub mod home;
 pub mod links;

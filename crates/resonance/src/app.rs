@@ -4,7 +4,7 @@
 //! WinUI design notes (Windows app design guidelines):
 //! - NavigationView in Left mode is the shell's primary navigation.
 //! - The title bar hosts the search box — the app's primary command.
-//! - The bottom player bar is a persistent 90px media bar modeled on
+//! - The bottom player bar is a persistent 96px media bar modeled on
 //!   Spotify's Now Playing bar: track info left, controls + progress
 //!   center, extras (lyrics, queue, volume) right.
 //! - Spacing is 4/8/12/24; type ramps 12/14/20/28.
@@ -20,7 +20,7 @@
 
 use std::time::Duration;
 
-use saavnapi::{ArtistArgs, LaunchData, SearchAll, Song};
+use saavnapi::{Album, Artist, ArtistArgs, LaunchData, Playlist, SearchAll, Song};
 use windows_reactor::*;
 
 use crate::data;
@@ -63,6 +63,8 @@ pub struct DetailsTarget {
 /// The data a details page shows once loaded. `songs` is the
 /// playable list (for a song: just itself); `song` is set only for
 /// a song detail (for the like button); `lyrics` only for songs.
+/// `album` / `artist` / `playlist` carry the full model for the
+/// matching kind, so each page can render its own layout.
 #[derive(Debug, Clone)]
 pub struct DetailsContent {
     pub song: Option<Song>,
@@ -70,6 +72,9 @@ pub struct DetailsContent {
     pub lyrics: Option<String>,
     pub subtitle: String,
     pub art: Option<String>,
+    pub album: Option<Album>,
+    pub artist: Option<Artist>,
+    pub playlist: Option<Playlist>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +153,8 @@ pub enum Message {
     VolumeChanged(f64),
     Tick,
     ToggleLike(Song),
+    ToggleLikeAlbum(Album),
+    ToggleLikePlaylist(Playlist),
     PlayByKind(String, String),
     OpenDetails(DetailsTarget),
     DetailsLoaded(Result<DetailsContent, String>),
@@ -265,6 +272,9 @@ async fn load_details(
                 lyrics,
                 subtitle,
                 art,
+                album: None,
+                artist: None,
+                playlist: None,
             })
         }
         "album" => {
@@ -276,12 +286,17 @@ async fn load_details(
                 .map(|artist| artist.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
+            let songs = album.songs.clone().unwrap_or_default();
+            let art = views::art_url(&album.image, "500x500");
             Ok(DetailsContent {
                 song: None,
-                songs: album.songs.unwrap_or_default(),
+                songs,
                 lyrics: None,
                 subtitle,
-                art: views::art_url(&album.image, "500x500"),
+                art,
+                album: Some(album),
+                artist: None,
+                playlist: None,
             })
         }
         "artist" => {
@@ -292,22 +307,33 @@ async fn load_details(
                 .follower_count
                 .map(|count| format!("{count} followers"))
                 .unwrap_or_default();
+            let songs = artist.top_songs.clone().unwrap_or_default();
+            let art = views::art_url(&artist.image, "500x500");
             Ok(DetailsContent {
                 song: None,
-                songs: artist.top_songs.unwrap_or_default(),
+                songs,
                 lyrics: None,
                 subtitle,
-                art: views::art_url(&artist.image, "500x500"),
+                art,
+                album: None,
+                artist: Some(artist),
+                playlist: None,
             })
         }
         _ => {
             let playlist = client.get_playlist_by_id(&target.id, 100, 0).await?;
+            let subtitle = playlist.description.clone().unwrap_or_default();
+            let songs = playlist.songs.clone().unwrap_or_default();
+            let art = views::art_url(&playlist.image, "500x500");
             Ok(DetailsContent {
                 song: None,
-                songs: playlist.songs.unwrap_or_default(),
+                songs,
                 lyrics: None,
-                subtitle: playlist.description.clone().unwrap_or_default(),
-                art: views::art_url(&playlist.image, "500x500"),
+                subtitle,
+                art,
+                album: None,
+                artist: None,
+                playlist: Some(playlist),
             })
         }
     }
@@ -599,6 +625,12 @@ impl Component for Shell {
             Message::ToggleLike(song) => {
                 self.library.toggle_like(song);
             }
+            Message::ToggleLikeAlbum(album) => {
+                self.library.toggle_like_album(album);
+            }
+            Message::ToggleLikePlaylist(playlist) => {
+                self.library.toggle_like_playlist(playlist);
+            }
             Message::PlayByKind(kind, id) => {
                 spawn_play_by_kind(context, kind, id);
             }
@@ -621,7 +653,13 @@ impl Component for Shell {
                 if info.is_right_button_pressed {
                     self.open_menu(target, info.window_x, info.window_y);
                 } else if info.is_left_button_pressed {
-                    self.open_details(context, target);
+                    // A song card just plays the song; every other
+                    // kind opens its own details page.
+                    if target.kind == "song" {
+                        spawn_play_by_kind(context, target.kind, target.id);
+                    } else {
+                        self.open_details(context, target);
+                    }
                 }
             }
             Message::OpenMenu(target, x, y) => {
@@ -756,13 +794,30 @@ impl Component for Shell {
 
         // Settings sits in the pane footer, at the very bottom of
         // the sidebar — not with the other navigation items. (0.100
-        // has no FooterMenuItems slot, so it is a Button in the
-        // PaneFooter slot; its label goes bold when selected, since
-        // Button has no background setter.)
-        let settings_footer = Button::new()
+        // has no FooterMenuItems slot.) It is a Border, not a Button:
+        // a Button in the pane footer never answered its click, while
+        // Border pointer presses are the input path that works
+        // everywhere else in the app. Selected state is a card
+        // background fill, so it can never look selected when it
+        // isn't.
+        let settings_selected = self.page == Page::Settings;
+        let settings_footer = Border::new()
             .horizontal_alignment(HorizontalAlignment::Stretch)
-            .horizontal_content_alignment(HorizontalAlignment::Left)
-            .on_click(context.message(Message::Navigate(Page::Settings)))
+            .background(if settings_selected {
+                Brush::Theme(ThemeBrush::CardBackground)
+            } else {
+                Brush::Solid(Color::transparent())
+            })
+            .corner_radius(CornerRadius::uniform(4.0))
+            .margin(8.0)
+            .padding(Thickness::new(12.0, 8.0, 12.0, 8.0))
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if info.is_left_button_pressed {
+                    Message::Navigate(Page::Settings)
+                } else {
+                    Message::Noop
+                }
+            }))
             .content(
                 StackPanel::new()
                     .orientation(Orientation::Horizontal)
@@ -772,7 +827,7 @@ impl Component for Shell {
                         TextBlock::new()
                             .text("Settings")
                             .font_size(14.0)
-                            .font_weight(if self.page == Page::Settings {
+                            .font_weight(if settings_selected {
                                 FontWeight::SEMI_BOLD
                             } else {
                                 FontWeight::NORMAL
@@ -816,7 +871,7 @@ impl Component for Shell {
             .rows([
                 GridLength::Auto,
                 GridLength::Star(1.0),
-                GridLength::Pixel(90.0),
+                GridLength::Pixel(96.0),
             ])
             .children((title_bar, navigation, player_bar));
 
@@ -1039,7 +1094,7 @@ impl Shell {
         }
     }
 
-    /// The persistent bottom player bar (90px), modeled on Spotify's
+    /// The persistent bottom player bar (96px), modeled on Spotify's
     /// Now Playing bar. Three zones: track info (left), controls +
     /// progress stacked (center), extras (right).
     ///
@@ -1050,17 +1105,24 @@ impl Shell {
         let has_current = self.player.has_current();
         let current = self.player.current().cloned();
 
-        // --- Left: 56px art, title/artist, add-to-liked button. ---
-        let (art, title, artist) = match &current {
+        // --- Left: 56px art, title (one line), artists (up to two
+        // lines of clickable names), add-to-liked button. ---
+        let (art, title, artist_view): (Option<String>, String, View) = match &current {
             Some(song) => (
                 views::art_url(&song.image, "150x150"),
                 song.name.clone(),
-                views::artist_names(song),
+                views::artist_links(&song.artists, 2, 44, context),
             ),
             None => (
                 None,
                 "Nothing playing".to_string(),
-                "Search or open Home to play a song".to_string(),
+                TextBlock::new()
+                    .text("Search or open Home to play a song")
+                    .font_size(12.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::Wrap)
+                    .max_lines(2)
+                    .into(),
             ),
         };
         let art_view: View = match art {
@@ -1117,12 +1179,10 @@ impl Shell {
                             .text(title)
                             .font_size(14.0)
                             .font_weight(FontWeight::SEMI_BOLD)
-                            .text_wrapping(TextWrapping::Wrap),
-                        TextBlock::new()
-                            .text(artist)
-                            .font_size(12.0)
-                            .opacity(0.7)
-                            .text_wrapping(TextWrapping::Wrap),
+                            .text_wrapping(TextWrapping::NoWrap)
+                            .max_lines(1)
+                            .text_trimming(TextTrimming::CharacterEllipsis),
+                        artist_view,
                     )),
                 like_button,
             ));
@@ -1160,7 +1220,7 @@ impl Shell {
         let center = StackPanel::new()
             .spacing(2.0)
             .vertical_alignment(VerticalAlignment::Center)
-            .margin(16.0)
+            .margin(8.0)
             .grid_column(1)
             .children((
                 StackPanel::new()

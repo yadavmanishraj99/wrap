@@ -164,6 +164,46 @@ impl Library {
         }
     }
 
+    /// Is this album liked?
+    pub fn is_album_liked(&self, album_id: &str) -> bool {
+        self.liked_albums.iter().any(|a| a.id == album_id)
+    }
+
+    /// Toggle an album in liked albums. Returns the new liked state.
+    pub fn toggle_like_album(&mut self, album: Album) -> bool {
+        if let Some(pos) = self.liked_albums.iter().position(|a| a.id == album.id) {
+            self.liked_albums.remove(pos);
+            self.save();
+            false
+        } else {
+            self.liked_albums.push(album);
+            self.save();
+            true
+        }
+    }
+
+    /// Is this playlist liked?
+    pub fn is_playlist_liked(&self, playlist_id: &str) -> bool {
+        self.liked_playlists.iter().any(|p| p.id == playlist_id)
+    }
+
+    /// Toggle a playlist in liked playlists. Returns the new liked state.
+    pub fn toggle_like_playlist(&mut self, playlist: Playlist) -> bool {
+        if let Some(pos) = self
+            .liked_playlists
+            .iter()
+            .position(|p| p.id == playlist.id)
+        {
+            self.liked_playlists.remove(pos);
+            self.save();
+            false
+        } else {
+            self.liked_playlists.push(playlist);
+            self.save();
+            true
+        }
+    }
+
     /// Record a play at the front of recents (deduplicated, capped).
     pub fn push_recent(&mut self, song: Song) {
         self.recent_songs.retain(|s| s.id != song.id);

@@ -1,131 +1,126 @@
-//! Library page: liked songs and recently played, persisted locally
-//! in `%LOCALAPPDATA%\Resonance\library.json`. Liked albums and
-//! playlists render here too (liking them from Search/Home lands in
-//! a later push — the store already holds them).
+//! Library page: liked songs, recently played, liked albums and
+//! liked playlists, persisted locally in
+//! `%LOCALAPPDATA%\Resonance\library.json`. Every section is a
+//! Home-style row of media cards — song cards play, album and
+//! playlist cards open their pages. Albums and playlists land here
+//! via the Like button on their pages.
 
+use saavnapi::{Album, Playlist, Song};
 use windows_reactor::*;
 
-use crate::app::Shell;
+use crate::app::{DetailsTarget, Shell};
 use crate::views;
 
-/// A song section: heading + keyed song rows, or an empty note.
-fn song_section(
+/// A card section, or its heading plus an empty note when there is
+/// nothing to show.
+fn card_section_or_empty(
     key: &str,
     title: &str,
-    songs: &[saavnapi::Song],
+    targets: &[DetailsTarget],
     empty_note: &str,
     shell: &Shell,
     context: &mut ViewContext<Shell>,
 ) -> KeyedView {
-    let body: View = if songs.is_empty() {
-        TextBlock::new()
-            .text(empty_note)
-            .font_size(14.0)
-            .opacity(0.7)
-            .into()
+    if targets.is_empty() {
+        KeyedView::new(
+            key,
+            StackPanel::new().spacing(8.0).children((
+                views::section_header(title),
+                TextBlock::new()
+                    .text(empty_note)
+                    .font_size(14.0)
+                    .opacity(0.7),
+            )),
+        )
     } else {
-        let rows: Vec<KeyedView> = songs
-            .iter()
-            .map(|song| {
-                KeyedView::new(
-                    song.id.clone(),
-                    views::song_row(song, songs, shell, context),
-                )
-            })
-            .collect();
-        StackPanel::new().spacing(4.0).keyed_children(rows)
-    };
-    KeyedView::new(
-        key,
-        StackPanel::new().spacing(4.0).keyed_children(vec![
-            KeyedView::new(format!("{key}-header"), views::section_header(title)),
-            KeyedView::new(format!("{key}-body"), body),
-        ]),
-    )
+        KeyedView::new(key, views::card_section(title, targets, shell, context))
+    }
+}
+
+fn song_targets(songs: &[Song]) -> Vec<DetailsTarget> {
+    songs
+        .iter()
+        .map(|song| DetailsTarget {
+            kind: "song".to_string(),
+            id: song.id.clone(),
+            title: song.name.clone(),
+            subtitle: views::artist_names(song),
+            art: views::art_url(&song.image, "500x500"),
+        })
+        .collect()
+}
+
+fn album_targets(albums: &[Album]) -> Vec<DetailsTarget> {
+    albums
+        .iter()
+        .map(|album| DetailsTarget {
+            kind: "album".to_string(),
+            id: album.id.clone(),
+            title: album.name.clone(),
+            subtitle: album
+                .artists
+                .primary
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            art: views::art_url(&album.image, "500x500"),
+        })
+        .collect()
+}
+
+fn playlist_targets(playlists: &[Playlist]) -> Vec<DetailsTarget> {
+    playlists
+        .iter()
+        .map(|playlist| DetailsTarget {
+            kind: "playlist".to_string(),
+            id: playlist.id.clone(),
+            title: playlist.name.clone(),
+            subtitle: playlist.description.clone().unwrap_or_default(),
+            art: views::art_url(&playlist.image, "500x500"),
+        })
+        .collect()
 }
 
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
-    let liked_albums: View = if shell.library.liked_albums.is_empty() {
-        TextBlock::new()
-            .text("No liked albums yet.")
-            .font_size(14.0)
-            .opacity(0.7)
-            .into()
-    } else {
-        let rows: Vec<KeyedView> = shell
-            .library
-            .liked_albums
-            .iter()
-            .map(|album| {
-                KeyedView::new(
-                    album.id.clone(),
-                    TextBlock::new().text(album.name.clone()).font_size(14.0),
-                )
-            })
-            .collect();
-        StackPanel::new().spacing(4.0).keyed_children(rows)
-    };
-
-    let liked_playlists: View = if shell.library.liked_playlists.is_empty() {
-        TextBlock::new()
-            .text("No liked playlists yet.")
-            .font_size(14.0)
-            .opacity(0.7)
-            .into()
-    } else {
-        let rows: Vec<KeyedView> = shell
-            .library
-            .liked_playlists
-            .iter()
-            .map(|playlist| {
-                KeyedView::new(
-                    playlist.id.clone(),
-                    TextBlock::new().text(playlist.name.clone()).font_size(14.0),
-                )
-            })
-            .collect();
-        StackPanel::new().spacing(4.0).keyed_children(rows)
-    };
-
     ScrollViewer::new().content(
-        StackPanel::new().margin(24.0).spacing(24.0).children((
+        StackPanel::new().margin(24.0).spacing(32.0).children((
             TextBlock::new()
                 .text("Your Library")
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
-            StackPanel::new().spacing(24.0).keyed_children(vec![
-                song_section(
+            StackPanel::new().spacing(32.0).keyed_children(vec![
+                card_section_or_empty(
                     "liked",
                     "Liked songs",
-                    &shell.library.liked_songs,
+                    &song_targets(&shell.library.liked_songs),
                     "No liked songs yet — tap the heart on any song.",
                     shell,
                     context,
                 ),
-                song_section(
+                card_section_or_empty(
                     "recent",
                     "Recently played",
-                    &shell.library.recent_songs,
+                    &song_targets(&shell.library.recent_songs),
                     "Nothing played yet.",
                     shell,
                     context,
                 ),
-                KeyedView::new(
+                card_section_or_empty(
                     "albums",
-                    StackPanel::new().spacing(4.0).keyed_children(vec![
-                        KeyedView::new("albums-header", views::section_header("Liked albums")),
-                        KeyedView::new("albums-body", liked_albums),
-                    ]),
+                    "Liked albums",
+                    &album_targets(&shell.library.liked_albums),
+                    "No liked albums yet — tap Like on any album page.",
+                    shell,
+                    context,
                 ),
-                KeyedView::new(
+                card_section_or_empty(
                     "playlists",
-                    StackPanel::new().spacing(4.0).keyed_children(vec![
-                        KeyedView::new(
-                            "playlists-header",
-                            views::section_header("Liked playlists"),
-                        ),
-                        KeyedView::new("playlists-body", liked_playlists),
-                    ]),
+                    "Liked playlists",
+                    &playlist_targets(&shell.library.liked_playlists),
+                    "No liked playlists yet — tap Like on any playlist page.",
+                    shell,
+                    context,
                 ),
             ]),
         )),

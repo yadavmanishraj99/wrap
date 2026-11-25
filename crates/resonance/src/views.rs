@@ -6,7 +6,7 @@
 //! `.content()` / `.children()` call; `Image::source` returns
 //! `Result`; `FontWeight` uses `SEMI_BOLD` / `BOLD` constants.
 
-use saavnapi::{DownloadLink, Song};
+use saavnapi::{ArtistGroups, ArtistMap, DownloadLink, Song};
 use windows_reactor::*;
 
 use crate::app::{DetailsTarget, Message, Shell};
@@ -56,6 +56,148 @@ pub fn section_header(title: &str) -> View {
         .font_size(20.0)
         .font_weight(FontWeight::SEMI_BOLD)
         .into()
+}
+
+/// One section of media cards, Home-style: heading + up to 20 cards
+/// in one row (<= 10 items) or two rows (> 10 items), scrolling
+/// horizontally with the bar hidden. Shared by Home, Search and
+/// Library so the three pages lay out identically.
+pub fn card_section(
+    title: &str,
+    targets: &[DetailsTarget],
+    shell: &Shell,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    let shown: Vec<&DetailsTarget> = targets.iter().take(20).collect();
+    if shown.is_empty() {
+        return View::empty();
+    }
+    let mut row = |slice: &[&DetailsTarget]| -> View {
+        let cards: Vec<KeyedView> = slice
+            .iter()
+            .map(|target| {
+                KeyedView::new(
+                    target.id.clone(),
+                    media_card(
+                        (*target).clone(),
+                        target.art.clone(),
+                        shell.hovered_card.as_deref() == Some(target.id.as_str()),
+                        context,
+                    ),
+                )
+            })
+            .collect();
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(12.0)
+            .keyed_children(cards)
+    };
+    let body: View = if shown.len() <= 10 {
+        row(&shown)
+    } else {
+        let (first, second) = shown.split_at(10);
+        StackPanel::new()
+            .spacing(20.0)
+            .children((row(first), row(second)))
+    };
+    StackPanel::new().spacing(8.0).children((
+        section_header(title),
+        ScrollViewer::new()
+            .horizontal_scroll_bar_visibility(ScrollBarVisibility::Hidden)
+            .vertical_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+            .content(body),
+    ))
+}
+
+/// Clickable artist names: each name opens its artist page. Names
+/// are laid out greedily across up to `max_rows` rows of about
+/// `chars_per_row` characters (separated by ", "); overflow names
+/// are dropped. Primary artists first, then featured, then all.
+/// With no artists, plain "Unknown artist" text.
+pub fn artist_links(
+    groups: &ArtistGroups,
+    max_rows: usize,
+    chars_per_row: usize,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    let artists: &[ArtistMap] = if !groups.primary.is_empty() {
+        &groups.primary
+    } else if !groups.featured.is_empty() {
+        &groups.featured
+    } else {
+        &groups.all
+    };
+    if artists.is_empty() {
+        return TextBlock::new()
+            .text("Unknown artist")
+            .font_size(12.0)
+            .opacity(0.7)
+            .into();
+    }
+    let mut rows: Vec<Vec<&ArtistMap>> = vec![Vec::new()];
+    for artist in artists {
+        let cost = artist.name.chars().count() + 2; // name + ", "
+        let current_len: usize = rows
+            .last()
+            .unwrap()
+            .iter()
+            .map(|a| a.name.chars().count() + 2)
+            .sum();
+        if !rows.last().unwrap().is_empty() && current_len + cost > chars_per_row {
+            if rows.len() >= max_rows {
+                break;
+            }
+            rows.push(Vec::new());
+        }
+        rows.last_mut().unwrap().push(artist);
+    }
+    let row_views: Vec<KeyedView> = rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            let mut items: Vec<KeyedView> = Vec::new();
+            for (index, artist) in row.iter().enumerate() {
+                if index > 0 {
+                    items.push(KeyedView::new(
+                        format!("{row_index}-{index}-sep"),
+                        TextBlock::new().text(", ").font_size(12.0).opacity(0.7),
+                    ));
+                }
+                let target = DetailsTarget {
+                    kind: "artist".to_string(),
+                    id: artist.id.clone(),
+                    title: artist.name.clone(),
+                    subtitle: String::new(),
+                    art: art_url(&artist.image, "500x500"),
+                };
+                items.push(KeyedView::new(
+                    format!("{row_index}-{index}"),
+                    Border::new()
+                        .background(Brush::Solid(Color::transparent()))
+                        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                            if info.is_left_button_pressed {
+                                Message::OpenDetails(target.clone())
+                            } else {
+                                Message::Noop
+                            }
+                        }))
+                        .content(
+                            TextBlock::new()
+                                .text(artist.name.clone())
+                                .font_size(12.0)
+                                .opacity(0.7),
+                        ),
+                ));
+            }
+            KeyedView::new(
+                format!("row-{row_index}"),
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .keyed_children(items),
+            )
+        })
+        .collect();
+    StackPanel::new().keyed_children(row_views)
 }
 
 /// A media card: square art-fill artwork (138px), title and
