@@ -84,12 +84,15 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   page. Picking a suggestion searches it at once (no debounce).
   Results render as Home-style media-card sections (Top result,
   Songs, Albums, Artists, Playlists).
-- **Sidebar** — Home, Search, Library, then Settings last in the nav
-  list (it was a NavigationViewItem in the PaneFooter, but a footer
-  item never fires the NavigationView's selection callback, so
-  clicking it did nothing; in the MenuItems list it is a real nav
-  item like the rest. 0.100 has no FooterMenuItems slot, so the
-  footer cannot hold a working nav item). No pane title,
+- **Sidebar** — Home, Search, Library at the top; Settings pinned
+  to the very bottom (pane footer). It is a real NavigationViewItem
+  (same hover, selection indicator, icon + label as the other nav
+  items), but a footer item never fires the NavigationView's
+  selection callback, so its icon and label are each wrapped in a
+  transparent Border with a pointer handler that navigates to
+  Settings; the selection indicator is set from the current page.
+  0.100 has no FooterMenuItems slot, so the PaneFooter is the only
+  bottom-pinned slot. No pane title,
   and the title bar shows no current-page text: just the app title,
   the search field, and the theme toggle (no search icon button).
 - **Playback** — `MediaPlayer` plays saavnapi stream URLs at the

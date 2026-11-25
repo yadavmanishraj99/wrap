@@ -1153,14 +1153,7 @@ impl Component for Shell {
         // The nav list: Home, Search, Library, then — only while
         // pinned items exist — a divider and the pinned rows below
         // it. A pinned row is a shortcut, not a page, so it never
-        // changes the nav selection. Settings is last in the list:
-        // it was a NavigationViewItem in the PaneFooter, but a footer
-        // item never fires the NavigationView's selection callback,
-        // so clicking it did nothing. In the MenuItems list it is a
-        // real nav item like the rest, and its tag routes through the
-        // same on_selected_tag_changed callback. (0.100 has no
-        // FooterMenuItems slot, so the footer cannot hold a working
-        // nav item.)
+        // changes the nav selection.
         let mut menu_items: Vec<KeyedView> = vec![
             nav_item("home", "Home", Symbol::Home, self.page == Page::Home),
             nav_item("search", "Search", Symbol::Find, self.page == Page::Search),
@@ -1178,14 +1171,52 @@ impl Component for Shell {
                 menu_items.push(pinned_nav_item(pinned, hovered, context));
             }
         }
-        // Settings last in the nav list (see above — the PaneFooter
-        // cannot hold a working nav item).
-        menu_items.push(nav_item(
-            "settings",
-            "Settings",
-            Symbol::Setting,
-            self.page == Page::Settings,
-        ));
+
+        // Settings is pinned to the very bottom of the sidebar, in
+        // the PaneFooter. It is a real NavigationViewItem — the same
+        // component as Home/Search/Library, so it gets the same hover,
+        // selection indicator, and icon + label layout. But a footer
+        // item never fires the NavigationView's selection callback
+        // (the footer is not part of the nav selection model), so
+        // clicking it would do nothing on its own. The Icon and the
+        // label are each wrapped in a transparent Border with a
+        // pointer handler that navigates to Settings, so the whole
+        // row (icon and label) is clickable. The selection indicator
+        // is set declaratively from the current page, so it tracks
+        // correctly even though the nav never selects this item.
+        // (0.100 has no FooterMenuItems slot — the PaneFooter is the
+        // only bottom-pinned slot.)
+        let settings_footer = {
+            let go_settings = |context: &mut ViewContext<Shell>| {
+                context.callback(move |info: PointerEventInfo| {
+                    if info.is_left_button_pressed {
+                        Message::Navigate(Page::Settings)
+                    } else {
+                        Message::Noop
+                    }
+                })
+            };
+            NavigationViewItem::new()
+                .tag("settings")
+                .is_selected(self.page == Page::Settings)
+                .selects_on_invoked(true)
+                .slots([
+                    SlotView::new(
+                        NavigationViewItemSlot::Icon,
+                        Border::new()
+                            .background(Brush::Solid(Color::transparent()))
+                            .on_pointer_pressed(go_settings(context))
+                            .content(SymbolIcon::new().symbol(Symbol::Setting)),
+                    ),
+                    SlotView::new(
+                        NavigationViewItemSlot::Content,
+                        Border::new()
+                            .background(Brush::Solid(Color::transparent()))
+                            .on_pointer_pressed(go_settings(context))
+                            .content(TextBlock::new().text("Settings").font_size(14.0)),
+                    ),
+                ])
+        };
 
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)
@@ -1213,6 +1244,7 @@ impl Component for Shell {
             .grid_row(1)
             .slots([
                 SlotView::collection(NavigationViewSlot::MenuItems, menu_items),
+                SlotView::new(NavigationViewSlot::PaneFooter, settings_footer),
                 SlotView::new(NavigationViewSlot::Content, page_view),
             ]);
 
