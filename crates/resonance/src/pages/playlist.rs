@@ -65,46 +65,17 @@ pub fn view(
                         .text(format!("{} songs", content.songs.len()))
                         .font_size(14.0)
                         .opacity(0.7),
-                    StackPanel::new()
-                        .orientation(Orientation::Horizontal)
-                        .spacing(8.0)
-                        .children((
-                            Button::new()
-                                .is_enabled(!content.songs.is_empty())
-                                .on_click(
-                                    context.message(Message::PlaySong(content.songs.clone(), 0)),
-                                )
-                                .content(
-                                    StackPanel::new()
-                                        .orientation(Orientation::Horizontal)
-                                        .spacing(8.0)
-                                        .children((
-                                            SymbolIcon::new().symbol(Symbol::Play),
-                                            TextBlock::new().text("Play"),
-                                        )),
-                                ),
-                            Button::new()
-                                .on_click(
-                                    context.message(Message::ToggleLikePlaylist(playlist_for_like)),
-                                )
-                                .content(
-                                    StackPanel::new()
-                                        .orientation(Orientation::Horizontal)
-                                        .spacing(8.0)
-                                        .children((
-                                            SymbolIcon::new().symbol(if liked {
-                                                Symbol::Favorite
-                                            } else {
-                                                Symbol::Add
-                                            }),
-                                            TextBlock::new().text(if liked {
-                                                "Liked"
-                                            } else {
-                                                "Like"
-                                            }),
-                                        )),
-                                ),
+                    views::details_action_row(
+                        &content.songs,
+                        Some((
+                            liked,
+                            Message::ToggleLikePlaylist(playlist_for_like),
+                            playlist.id.clone(),
                         )),
+                        target,
+                        shell,
+                        context,
+                    ),
                 )),
         ));
 

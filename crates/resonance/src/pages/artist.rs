@@ -3,7 +3,7 @@
 
 use windows_reactor::*;
 
-use crate::app::{DetailsContent, DetailsTarget, Message, Shell};
+use crate::app::{DetailsContent, DetailsTarget, Shell};
 use crate::views;
 
 pub fn view(
@@ -58,18 +58,7 @@ pub fn view(
                         .font_size(14.0)
                         .opacity(0.7)
                         .text_wrapping(TextWrapping::Wrap),
-                    Button::new()
-                        .is_enabled(!content.songs.is_empty())
-                        .on_click(context.message(Message::PlaySong(content.songs.clone(), 0)))
-                        .content(
-                            StackPanel::new()
-                                .orientation(Orientation::Horizontal)
-                                .spacing(8.0)
-                                .children((
-                                    SymbolIcon::new().symbol(Symbol::Play),
-                                    TextBlock::new().text("Play"),
-                                )),
-                        ),
+                    views::details_action_row(&content.songs, None, target, shell, context),
                 )),
         ));
 

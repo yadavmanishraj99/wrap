@@ -182,6 +182,7 @@ pub enum Message {
     HomeLoaded(Result<LaunchData, String>),
     SearchAllLoaded(String, Result<SearchAll, String>),
     PlaySong(Vec<Song>, usize),
+    ShufflePlay(Vec<Song>),
     PlayPause,
     Next,
     Previous,
@@ -790,6 +791,25 @@ impl Component for Shell {
                 // playing/position/duration refresh, opening the Now
                 // Playing sidebar, the artist-brief fetch, the tick.
                 self.after_track_change(context);
+            }
+            Message::ShufflePlay(mut songs) => {
+                // Fisher-Yates with the same xorshift the player uses
+                // for shuffle_upcoming, seeded from the clock.
+                let mut state = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0x9E37_79B9_7F4A_7C15)
+                    | 1;
+                let mut n = songs.len();
+                while n > 1 {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let j = (state % n as u64) as usize;
+                    n -= 1;
+                    songs.swap(n, j);
+                }
+                self.update(Message::PlaySong(songs, 0), context);
             }
             Message::Smtc(cmd) => {
                 // Re-spawn the listener first, so there is always

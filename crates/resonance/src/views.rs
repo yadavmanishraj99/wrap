@@ -413,7 +413,10 @@ pub fn like_button(
     if !liked {
         border = border
             .border_thickness(1.0)
-            .border_brush(Brush::Theme(ThemeBrush::CardStroke));
+            // The circle stroke is the same color as the icon (the
+            // theme's primary text color), so the button and its
+            // circle read as one unit.
+            .border_brush(Brush::Theme(ThemeBrush::PrimaryText));
     }
     if let Some(song) = song {
         let hover_id = song.id.clone();
@@ -443,6 +446,180 @@ pub fn like_button(
         } else {
             "Add to liked songs"
         })
+}
+
+/// The action row under a details header, left to right: a large
+/// 64x64 circular Play button (filled primary, Play icon centered),
+/// a shuffle icon button (icon only, no container), a circular like
+/// button (a plus in a circle outline, or a check in a filled
+/// primary circle when already liked), a download button (icon only,
+/// in a circle — a placeholder, the download feature is still under
+/// discussion), and a horizontal more icon button (icon only, no
+/// container) that opens the item's context menu. The icons in the
+/// circular buttons are centered, and the icon and the circle stroke
+/// are the same color (the theme's primary text color). `like` is
+/// `Some((liked, toggle, hover_id))` for items that can be liked
+/// (album, playlist, song) and `None` for artist, which has no like.
+pub fn details_action_row(
+    songs: &[Song],
+    like: Option<(bool, Message, String)>,
+    target: &DetailsTarget,
+    shell: &Shell,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    let play_songs = songs.to_vec();
+    let shuffle_songs = songs.to_vec();
+    let has_songs = !songs.is_empty();
+    // The large circular Play button: 64x64, filled primary, Play
+    // icon centered. Dimmed when there is nothing to play.
+    let play_button = Border::new()
+        .width(64.0)
+        .height(64.0)
+        .corner_radius(CornerRadius::uniform(32.0))
+        .background(Brush::Theme(ThemeBrush::Accent))
+        .opacity(if has_songs { 1.0 } else { 0.4 })
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if has_songs && info.is_left_button_pressed {
+                Message::PlaySong(play_songs.clone(), 0)
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::Play)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip("Play");
+    // Shuffle: icon only, no container — a transparent border with
+    // the icon centered, greyish.
+    let shuffle_button = Border::new()
+        .width(32.0)
+        .height(32.0)
+        .background(Brush::Solid(Color::transparent()))
+        .opacity(0.7)
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                Message::ShufflePlay(shuffle_songs.clone())
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::Shuffle)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip("Shuffle");
+    // Download: icon only, in a circle — a 24px outline circle with
+    // the icon centered, the icon and the circle stroke the same
+    // color. A placeholder for now; the download feature is still
+    // under discussion, so it does nothing yet.
+    let download_button = Border::new()
+        .width(24.0)
+        .height(24.0)
+        .corner_radius(CornerRadius::uniform(12.0))
+        .background(Brush::Solid(Color::transparent()))
+        .border_thickness(1.0)
+        .border_brush(Brush::Theme(ThemeBrush::PrimaryText))
+        .opacity(0.7)
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(|_info: PointerEventInfo| Message::Noop))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::Download)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip("Download");
+    // More: horizontal ellipsis, icon only, no container. Opens the
+    // item's context menu at the click position.
+    let more_target = target.clone();
+    let more_button = Border::new()
+        .width(32.0)
+        .height(32.0)
+        .background(Brush::Solid(Color::transparent()))
+        .opacity(0.7)
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                Message::OpenMenu(more_target.clone(), info.window_x, info.window_y)
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::More)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip("More");
+
+    let mut items: Vec<KeyedView> = vec![
+        KeyedView::new("play", play_button),
+        KeyedView::new("shuffle", shuffle_button),
+    ];
+    if let Some((liked, toggle, hover_id)) = like {
+        // The circular like button: a plus in a circle outline, or a
+        // check in a filled primary circle when already liked. The
+        // icon is centered, and the icon and the circle stroke are
+        // the same color. Greyish until hovered; the liked button is
+        // always full contrast.
+        let like_hovered = shell.hovered_like.as_deref() == Some(hover_id.as_str());
+        let mut border = Border::new()
+            .width(24.0)
+            .height(24.0)
+            .corner_radius(CornerRadius::uniform(12.0))
+            .background(if liked {
+                Brush::Theme(ThemeBrush::Accent)
+            } else {
+                Brush::Solid(Color::transparent())
+            })
+            .opacity(if liked || like_hovered { 1.0 } else { 0.55 })
+            .vertical_alignment(VerticalAlignment::Center);
+        if !liked {
+            border = border
+                .border_thickness(1.0)
+                .border_brush(Brush::Theme(ThemeBrush::PrimaryText));
+        }
+        let hover_id_enter = hover_id.clone();
+        let like_button = border
+            .on_pointer_entered(context.callback(move |_info: PointerEventInfo| {
+                Message::LikeHover(Some(hover_id_enter.clone()))
+            }))
+            .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::LikeHover(None)))
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if info.is_left_button_pressed {
+                    toggle.clone()
+                } else {
+                    Message::Noop
+                }
+            }))
+            .content(
+                SymbolIcon::new()
+                    .symbol(if liked { Symbol::Accept } else { Symbol::Add })
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            )
+            .tooltip(if liked {
+                "Remove from liked"
+            } else {
+                "Add to liked"
+            });
+        items.push(KeyedView::new("like", like_button));
+    }
+    items.push(KeyedView::new("download", download_button));
+    items.push(KeyedView::new("more", more_button));
+
+    StackPanel::new()
+        .orientation(Orientation::Horizontal)
+        .spacing(16.0)
+        .keyed_children(items)
 }
 
 /// One song row: artwork, title/artist, and — unless `compact` —

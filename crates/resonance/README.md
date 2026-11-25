@@ -68,12 +68,13 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   of skeleton cards each; Search shows its five result sections
   (Top result, Songs, Albums, Artists, Playlists); a details page
   shows that kind's header (circular art for an artist, square
-  otherwise; eyebrow / title / subtitle lines; Play and Like button
-  shapes) and its sections (Top songs + Top albums + Similar artists
-  for an artist; Songs for an album/playlist/chart; Lyrics for a
-  song). The fill is a solid gray with real contrast against the
-  page background in both themes (checked with the WCAG formula:
-  dark `#4A4A4A` (1.84:1), light `#BCBCBC` (1.71:1)). The
+  otherwise; eyebrow / title / subtitle lines; the action row:
+  64px circular Play, shuffle, circular like, circular download,
+  horizontal more) and its sections (Top songs + Top albums +
+  Similar artists for an artist; Songs for an album/playlist/chart;
+  Lyrics for a song). The fill is a solid gray with real contrast
+  against the page background in both themes (checked with the WCAG
+  formula: dark `#4A4A4A` (1.84:1), light `#BCBCBC` (1.71:1)). The
   skeletons are static — no shimmer pulse, no fade: motion is not
   supported, so the placeholders just sit at full opacity until the
   real content replaces them. Navigation is instant too — no page
@@ -127,6 +128,19 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   inside a 1px circle outline, greyish until hovered; already liked,
   a check inside a filled circle in the framework's primary color
   (Accent), always full contrast. Both read in dark and light mode.
+- **Details action row** — under a details header, left to right: a
+  64x64 circular Play button (filled primary, Play icon centered),
+  a shuffle icon button (icon only, no container), a circular like
+  button (plus in a circle outline, or a check in a filled primary
+  circle when already liked), a download button (icon only, in a
+  circle — a placeholder, the download feature is still under
+  discussion), and a horizontal more icon button (icon only, no
+  container) that opens the item's context menu. The icons in the
+  circular buttons are centered, and the icon and the circle stroke
+  are the same color (the theme's primary text color). The artist
+  page has no like button (artists can't be liked), so its row is
+  Play, shuffle, download, more. Shuffle plays the item's songs in
+  a shuffled order.
 - **Lyrics** — the song details page shows a song's lyrics when the
   API has them. It currently has no entry point since the player
   bar's lyrics button was removed. No connect-to-device, miniplayer,
