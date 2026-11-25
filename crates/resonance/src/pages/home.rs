@@ -48,7 +48,7 @@ fn section(
             .collect();
         StackPanel::new()
             .orientation(Orientation::Horizontal)
-            .spacing(4.0)
+            .spacing(12.0)
             .keyed_children(cards)
     };
     let body: View = if shown.len() <= 10 {
@@ -56,7 +56,7 @@ fn section(
     } else {
         let (first, second) = shown.split_at(10);
         StackPanel::new()
-            .spacing(12.0)
+            .spacing(20.0)
             .children((row(first), row(second)))
     };
     StackPanel::new().spacing(8.0).children((

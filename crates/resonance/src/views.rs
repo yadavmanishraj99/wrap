@@ -76,7 +76,7 @@ pub fn media_card(
     hovered: bool,
     context: &mut ViewContext<Shell>,
 ) -> View {
-    let size = 138.0;
+    let size = 168.0;
     let card_press = |t: DetailsTarget, context: &mut ViewContext<Shell>| {
         context.callback(move |info: PointerEventInfo| Message::CardPressed(t.clone(), info))
     };
@@ -97,6 +97,7 @@ pub fn media_card(
         Border::new()
             .width(size)
             .height(size)
+            .corner_radius(CornerRadius::uniform(4.0))
             .on_pointer_pressed(card_press(target.clone(), context))
             .content(art_view),
     )];

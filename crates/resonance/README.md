@@ -81,7 +81,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 
 | Page | Status |
 | --- | --- |
-| Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10), scrolling horizontally (scrollbar hidden); cards are 138px, top-aligned, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties) |
+| Home | Live — launch data as clickable media cards: Trending now, Top playlists, New albums, Charts; each section is 1 row (≤ 10 items) or 2 rows (> 10, 20px gap between rows), scrolling horizontally (scrollbar hidden); cards are 168px, 12px apart, top-aligned, art corners rounded 4px, title/subtitle max 2 lines, hover shows circular Play + more buttons, right-click/more opens a context menu (Play, Play next, Properties) |
 | Details | Live — opened by clicking any Home card: artwork, title, subtitle, Play, song list, lyrics for songs when available; title-bar back button returns |
 | Queue | Live — current playback queue from the player bar; playing a row starts the queue there; song titles wrap |
 | Search | Live — typing searches the typed text live (results + autocomplete from one call), Top result, Songs, Albums, Artists, Playlists |
