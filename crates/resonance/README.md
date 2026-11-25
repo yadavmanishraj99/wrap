@@ -42,15 +42,16 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   controls + progress stacked center (shuffle, previous, large
   filled circular play/pause, next, repeat — the four around the
   play button are borderless icon buttons; every button in the bar
-  has a tooltip), extras right (icon-only Now playing toggle, a
-  volume icon button that opens a native flyout with a vertical
-  volume slider right above it, and a More button). The three zones
+  has a tooltip), extras right (icon-only Now playing toggle, mute
+  + volume slider, 1% steps, and a More button). The three zones
   are equal-width outer columns with the controls in an Auto middle
   column, so the controls are truly centered in the window. The
   progress row is inset from the sides and each timer has a gap to
   the slider, so the times never stick to it. Nothing in the bar
   clips: the bar is tall enough for the two-line artist area and
-  the progress row.
+  the progress row. (The volume was briefly a native Flyout on a
+  Subtle Button, but that crashed the app at launch — 0xc000027b —
+  so it is back to the inline slider + mute button.)
 - **Media session (SMTC)** — the app owns the OS media session
   instead of letting MediaPlayer's automatic integration run it
   (that one only offered Play/Pause and showed "Unknown app" +

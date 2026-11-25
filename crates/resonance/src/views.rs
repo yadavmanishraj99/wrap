@@ -581,23 +581,24 @@ pub fn details_action_row(
                 .vertical_alignment(VerticalAlignment::Center),
         )
         .tooltip("Download");
-    // The More button: a real WinUI Button (Subtle style, so it
-    // reads as a bare icon) carrying a native context menu
-    // (MenuFlyout). A click opens the real menu; the menu reports
-    // the chosen item's label, which the helper maps back to the
-    // matching action. This replaces the hand-built overlay menu
+    // The More button: a real WinUI Button carrying a native
+    // context menu (MenuFlyout). A click opens the real menu; the
+    // menu reports the chosen item's label, which the helper maps
+    // back to the matching action. Plain default Button, no Subtle
+    // style and no tooltip — the Subtle + tooltip + Menu
+    // combination crashed the app at launch (0xc000027b) on the
+    // volume button, so the same pattern is avoided here until the
+    // cause is isolated. This replaces the hand-built overlay menu
     // for this button — the overlay stays only for right-click,
     // which the native menu cannot do.
     let is_pinned = shell.library.is_pinned(&target.kind, &target.id);
     let more_button = Button::new()
-        .style(ButtonStyle::Subtle)
         .content(
             SymbolIcon::new()
                 .symbol(Symbol::More)
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center),
         )
-        .tooltip("More")
         .menu(context_menu(target, is_pinned, context));
 
     let mut items: Vec<KeyedView> = vec![

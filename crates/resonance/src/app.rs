@@ -160,10 +160,9 @@ pub struct Shell {
     pub position: f64,
     pub duration: f64,
     pub playing: bool,
-    /// Volume muted from the player bar (session-only); the slider
-    /// shows 0 while muted and the pre-mute volume is restored.
+    /// Volume muted from the player bar (session-only); the volume
+    /// flyout's slider shows 0 while muted.
     pub muted: bool,
-    pub pre_mute_volume: f64,
 }
 
 #[derive(Clone)]
@@ -222,7 +221,6 @@ pub enum Message {
     CloseQueueOverlay,
     ToggleShuffle,
     CycleRepeat,
-    ToggleMute,
     Back,
     SetTheme(Theme),
     SetMaterial(Material),
@@ -755,7 +753,6 @@ impl Component for Shell {
             duration: 0.0,
             playing: false,
             muted: false,
-            pre_mute_volume: 0.8,
         };
         // Start listening for OS media-session button presses.
         shell.spawn_smtc_listener(context);
@@ -938,23 +935,6 @@ impl Component for Shell {
                 self.settings.volume = volume;
                 self.settings.save();
                 self.player.set_volume(volume);
-            }
-            Message::ToggleMute => {
-                if self.muted {
-                    self.muted = false;
-                    let volume = if self.pre_mute_volume > 0.0 {
-                        self.pre_mute_volume
-                    } else {
-                        0.8
-                    };
-                    self.settings.volume = volume;
-                    self.settings.save();
-                    self.player.set_volume(volume);
-                } else {
-                    self.pre_mute_volume = self.settings.volume;
-                    self.muted = true;
-                    self.player.set_volume(0.0);
-                }
             }
             Message::ToggleShuffle => {
                 self.settings.shuffle = !self.settings.shuffle;
@@ -1930,18 +1910,55 @@ impl Shell {
                     )),
             ));
 
-        // --- Right: now playing, mute + volume, and a More button
-        // at the far right that opens the context menu for the song
-        // now playing. ---
-        // NOTE: the volume was a native Flyout on a Subtle Button,
-        // but that crashed the app at launch (0xc000027b) — reverted
-        // to the inline slider + mute button, which works. The
-        // native Flyout is parked until the crash cause is isolated.
+        // --- Right: now playing, volume, and a More button at the
+        // far right that opens the context menu for the song now
+        // playing. ---
+        // The volume is a real WinUI Button with a native Flyout
+        // attached: a click opens the flyout above the button,
+        // holding a vertical slider. Dragging the slider to 0 mutes
+        // and dragging it up un-mutes (VolumeChanged handles that).
+        // NOTE: this is a plain default Button on purpose — no
+        // Subtle style and no tooltip. The previous version used a
+        // Subtle Button with a tooltip AND a Flyout, and it crashed
+        // the app at launch (0xc000027b). The tooltip + Flyout on
+        // the same Button, or the Subtle style lookup, is the
+        // suspect. Once this plain version is confirmed working,
+        // the borderless style can be tried again on its own.
+        let volume_value = if self.muted {
+            0.0
+        } else {
+            self.settings.volume
+        };
+        let volume_button = Button::new()
+            .content(SymbolIcon::new().symbol(if self.muted {
+                Symbol::Mute
+            } else {
+                Symbol::Volume
+            }))
+            .flyout_with(
+                Flyout::rich(
+                    Slider::new()
+                        .minimum(0.0)
+                        .maximum(1.0)
+                        // Step frequency defaults to 1.0 in WinUI,
+                        // which snapped this 0-1 slider to 0 or 1
+                        // only.
+                        .step_frequency(0.01)
+                        .value(volume_value)
+                        .orientation(Orientation::Vertical)
+                        .height(120.0)
+                        .on_value_changed(
+                            context.callback(|value: f64| Message::VolumeChanged(value)),
+                        ),
+                )
+                .placement(FlyoutPlacement::Top),
+            );
         // The More button at the far right: a real WinUI Button
-        // (Subtle style, so it reads as a bare icon) carrying a
-        // native context menu (MenuFlyout) for the song now playing.
-        // A click opens the real menu. Inert (dimmed, no menu) while
-        // nothing is playing.
+        // carrying a native context menu (MenuFlyout) for the song
+        // now playing. A click opens the real menu. Inert (dimmed,
+        // no menu) while nothing is playing. Plain default Button,
+        // no Subtle style and no tooltip — same reason as the
+        // volume button above.
         let more_button: View = match &current {
             Some(song) => {
                 let target = DetailsTarget {
@@ -1953,14 +1970,12 @@ impl Shell {
                 };
                 let is_pinned = self.library.is_pinned(&target.kind, &target.id);
                 Button::new()
-                    .style(ButtonStyle::Subtle)
                     .content(
                         SymbolIcon::new()
                             .symbol(Symbol::More)
                             .horizontal_alignment(HorizontalAlignment::Center)
                             .vertical_alignment(VerticalAlignment::Center),
                     )
-                    .tooltip("More")
                     .menu(views::context_menu(&target, is_pinned, context))
             }
             None => Border::new()
@@ -1994,29 +2009,7 @@ impl Shell {
                     true,
                     Message::ToggleNowPlaying,
                 ),
-                Button::new()
-                    .on_click(context.message(Message::ToggleMute))
-                    .content(SymbolIcon::new().symbol(if self.muted {
-                        Symbol::Mute
-                    } else {
-                        Symbol::Volume
-                    }))
-                    .tooltip(if self.muted { "Unmute" } else { "Mute" }),
-                Slider::new()
-                    .minimum(0.0)
-                    .maximum(1.0)
-                    // Step frequency defaults to 1.0 in WinUI, which
-                    // snapped this 0-1 slider to 0 or 1 only.
-                    .step_frequency(0.01)
-                    .value(if self.muted {
-                        0.0
-                    } else {
-                        self.settings.volume
-                    })
-                    .width(100.0)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .on_value_changed(context.callback(|value: f64| Message::VolumeChanged(value)))
-                    .tooltip("Volume"),
+                volume_button,
                 more_button,
             ));
 
