@@ -98,6 +98,40 @@ fn artist_targets(artists: &[Artist]) -> Vec<DetailsTarget> {
         .collect()
 }
 
+/// The auto "Downloads" playlist: individually downloaded songs
+/// (a collection download stays with its album / playlist).
+fn download_targets(shell: &Shell) -> Vec<DetailsTarget> {
+    shell
+        .downloads
+        .downloaded_songs()
+        .into_iter()
+        .map(|item| DetailsTarget {
+            kind: "song".to_string(),
+            id: item.song_id.clone(),
+            title: item.title.clone(),
+            subtitle: item.artist.clone(),
+            art: item.art.clone(),
+        })
+        .collect()
+}
+
+/// The downloaded artists: each one is a playlist of that
+/// artist's top songs, under the artist's name.
+fn downloaded_artist_targets(shell: &Shell) -> Vec<DetailsTarget> {
+    shell
+        .downloads
+        .downloaded_artists()
+        .into_iter()
+        .map(|collection| DetailsTarget {
+            kind: "artist".to_string(),
+            id: collection.id.clone(),
+            title: collection.title.clone(),
+            subtitle: format!("{} songs", collection.total_items),
+            art: collection.art.clone(),
+        })
+        .collect()
+}
+
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     // A details drill-in is an inner route of this page: when one
     // is open it renders here, inside the page, instead of the
@@ -112,6 +146,22 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
             StackPanel::new().spacing(32.0).keyed_children(vec![
+                card_section_or_empty(
+                    "downloads",
+                    "Downloads",
+                    &download_targets(shell),
+                    "No downloads yet — tap Download on any song.",
+                    shell,
+                    context,
+                ),
+                card_section_or_empty(
+                    "downloaded-artists",
+                    "Downloaded artists",
+                    &downloaded_artist_targets(shell),
+                    "No artist downloads yet — tap Download on any artist page.",
+                    shell,
+                    context,
+                ),
                 card_section_or_empty(
                     "liked",
                     "Liked songs",

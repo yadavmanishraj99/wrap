@@ -14,6 +14,7 @@
 
 mod app;
 mod data;
+mod download;
 mod pages;
 mod player;
 mod store;

@@ -26,6 +26,7 @@ use saavnapi::{Album, Artist, ArtistArgs, LaunchData, Playlist, SearchAll, Song}
 use windows_reactor::*;
 
 use crate::data;
+use crate::download::{self, DownloadEvent, DownloadManager, DownloadStatus};
 use crate::pages;
 use crate::player::{Player, Quality, SmtcCommand};
 use crate::store::{Library, Material, PinnedItem, QualitySetting, RepeatMode, Settings, Theme};
@@ -163,6 +164,19 @@ pub struct Shell {
     /// Volume muted from the player bar (session-only); the volume
     /// flyout's slider shows 0 while muted.
     pub muted: bool,
+    /// The download queue + state (songs + collections), persisted
+    /// to `downloads.json` so an interrupted download resumes.
+    pub downloads: DownloadManager,
+    /// The download event channel's receiving end, shared with the
+    /// listener the Shell spawns (one listener at a time, blocking
+    /// on recv; the DownloadEvent handler re-spawns it after each
+    /// event). None when no download has ever run this session.
+    /// An async-aware Mutex: the listener awaits the receive while
+    /// holding it.
+    pub download_rx: Option<Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<DownloadEvent>>>>,
+    /// The download event channel's sending end, handed to each
+    /// download task so it can report progress / completion.
+    pub download_tx: Option<tokio::sync::mpsc::Sender<DownloadEvent>>,
 }
 
 #[derive(Clone)]
@@ -208,6 +222,19 @@ pub enum Message {
     /// Play a pinned song by id (its sidebar row only stores the id,
     /// so the full Song is fetched first).
     PlayPinnedSong(String),
+    /// Download a song (single) or a whole collection (album,
+    /// playlist, chart). A song downloads on its own; a collection
+    /// downloads every song in it.
+    DownloadTarget(DetailsTarget),
+    /// A collection's songs are fetched — queue them and start
+    /// each download task.
+    DownloadTargetReady(DetailsTarget, Vec<Song>),
+    /// A collection's songs could not be fetched.
+    DownloadTargetFailed(DetailsTarget, String),
+    /// A download progress / completion / failure event from a
+    /// download task. The handler updates the download state and
+    /// re-spawns the listener.
+    DownloadEvent(DownloadEvent),
     PlayNext(Vec<Song>),
     PropertiesLoaded(Result<DetailsContent, String>),
     CloseProperties,
@@ -719,6 +746,16 @@ impl Component for Shell {
             .take_smtc_receiver()
             .map(|rx| Arc::new(Mutex::new(rx)));
 
+        // Downloads: load the persisted queue (an interrupted
+        // download resumes) and open the event channel the download
+        // tasks report progress on.
+        let app_dir = crate::store::app_dir();
+        let download_dir = download::default_download_dir(&app_dir);
+        let downloads = DownloadManager::load(&app_dir, download_dir);
+        let (download_tx, download_rx) = tokio::sync::mpsc::channel::<DownloadEvent>(256);
+        let download_rx = Some(Arc::new(tokio::sync::Mutex::new(download_rx)));
+        let download_tx = Some(download_tx);
+
         // Home data loads in the background as the shell opens.
         spawn_home_load(context);
 
@@ -753,9 +790,17 @@ impl Component for Shell {
             duration: 0.0,
             playing: false,
             muted: false,
+            downloads,
+            download_rx,
+            download_tx,
         };
         // Start listening for OS media-session button presses.
         shell.spawn_smtc_listener(context);
+        // Start listening for download progress / completion.
+        shell.spawn_download_listener(context);
+        // Resume any downloads that were interrupted when the app
+        // last closed (they were reset to Queued on load).
+        shell.resume_downloads(context);
         shell
     }
 
@@ -1123,6 +1168,138 @@ impl Component for Shell {
             Message::PlayPinnedSong(id) => {
                 spawn_play_pinned_song(context, id);
             }
+            Message::DownloadTarget(target) => {
+                // Close the context menu (when this came from one).
+                self.menu = None;
+                // Already downloaded, or already downloading: do
+                // nothing (tapping Download again does not restart
+                // a finished or in-flight download).
+                let already = match target.kind.as_str() {
+                    "song" => {
+                        self.downloads.is_downloaded(&target.id)
+                            || self.downloads.is_downloading(&target.id)
+                    }
+                    _ => self.downloads.is_collection_downloading(&target.id),
+                };
+                if !already {
+                    self.spawn_download_target(context, target);
+                }
+            }
+            Message::DownloadTargetReady(target, songs) => {
+                let quality = Quality::from_setting(self.settings.quality);
+                let is_collection = target.kind != "song";
+                // A collection download groups its songs under the
+                // collection id; a lone song belongs to no
+                // collection (it lands in the auto "Downloads"
+                // playlist in the Library instead).
+                let collection_id = if is_collection {
+                    Some(target.id.clone())
+                } else {
+                    None
+                };
+                let subfolder = if is_collection {
+                    download::sanitize_filename(&target.title)
+                } else {
+                    String::new()
+                };
+                if is_collection {
+                    self.downloads.collections.insert(
+                        target.id.clone(),
+                        crate::download::CollectionDownload {
+                            id: target.id.clone(),
+                            kind: target.kind.clone(),
+                            title: target.title.clone(),
+                            total_items: songs.len(),
+                            completed_items: 0,
+                            total_bytes: 0,
+                            downloaded_bytes: 0,
+                            status: DownloadStatus::Queued,
+                            art: target.art.clone(),
+                        },
+                    );
+                }
+                let mut items = Vec::new();
+                for song in &songs {
+                    let Some(url) = crate::player::pick_url(song, quality) else {
+                        continue;
+                    };
+                    let artist = crate::views::artist_names(song);
+                    let item = crate::download::DownloadItem {
+                        song_id: song.id.clone(),
+                        title: song.name.clone(),
+                        artist: artist.clone(),
+                        collection_id: collection_id.clone(),
+                        url,
+                        total_bytes: None,
+                        downloaded_bytes: 0,
+                        status: DownloadStatus::Queued,
+                        error: None,
+                        file_name: download::song_file_name(&artist, &song.name),
+                        subfolder: subfolder.clone(),
+                        art: crate::views::art_url(&song.image, "500x500"),
+                    };
+                    // Resume a partial file: the download task
+                    // picks up the `.part` size itself.
+                    self.downloads
+                        .items
+                        .insert(item.song_id.clone(), item.clone());
+                    items.push(item);
+                }
+                self.downloads.save(&crate::store::app_dir());
+                for item in items {
+                    self.spawn_download_task(context, item);
+                }
+            }
+            Message::DownloadTargetFailed(_target, _err) => {
+                // The songs could not be fetched; there is no
+                // download to start. (No error UI for downloads
+                // yet — the button simply does nothing.)
+            }
+            Message::DownloadEvent(event) => {
+                // Re-spawn the listener first, so there is always
+                // one waiting for the next event.
+                self.spawn_download_listener(context);
+                match event {
+                    DownloadEvent::Progress {
+                        song_id,
+                        downloaded,
+                        total,
+                    } => {
+                        if let Some(item) = self.downloads.items.get_mut(&song_id) {
+                            item.downloaded_bytes = downloaded;
+                            if total.is_some() {
+                                item.total_bytes = total;
+                            }
+                            item.status = DownloadStatus::Downloading;
+                        }
+                    }
+                    DownloadEvent::Completed { song_id } => {
+                        let mut collection_id = None;
+                        if let Some(item) = self.downloads.items.get_mut(&song_id) {
+                            item.status = DownloadStatus::Completed;
+                            item.error = None;
+                            collection_id = item.collection_id.clone();
+                        }
+                        if let Some(collection_id) = collection_id
+                            && let Some(collection) =
+                                self.downloads.collections.get_mut(&collection_id)
+                        {
+                            collection.completed_items += 1;
+                            if collection.completed_items >= collection.total_items {
+                                collection.status = DownloadStatus::Completed;
+                            }
+                        }
+                        self.downloads.save(&crate::store::app_dir());
+                    }
+                    DownloadEvent::Failed { song_id, error } => {
+                        if let Some(item) = self.downloads.items.get_mut(&song_id) {
+                            item.status = DownloadStatus::Failed;
+                            item.error = Some(error);
+                        }
+                        self.downloads.save(&crate::store::app_dir());
+                    }
+                }
+            }
             Message::PlayNext(songs) => {
                 if songs.is_empty() {
                     // Nothing queued; ignore.
@@ -1437,6 +1614,7 @@ impl Shell {
         let target = menu.target.clone();
         let play_target = target.clone();
         let next_target = target.clone();
+        let download_target = target.clone();
         let pin_target = target.clone();
         let pin_label = if self.library.is_pinned(&target.kind, &target.id) {
             "Unpin"
@@ -1457,6 +1635,11 @@ impl Shell {
             .content(StackPanel::new().spacing(2.0).children((
                 menu_row("Play", Message::MenuPlay(play_target), context),
                 menu_row("Play next", Message::MenuPlayNext(next_target), context),
+                menu_row(
+                    "Download",
+                    Message::DownloadTarget(download_target),
+                    context,
+                ),
                 menu_row("Properties", Message::MenuProperties(target), context),
                 menu_row(pin_label, Message::TogglePin(pin_target), context),
             )))
@@ -1650,6 +1833,81 @@ impl Shell {
             match cmd {
                 Some(cmd) => Message::Smtc(cmd),
                 None => Message::Noop,
+            }
+        });
+    }
+
+    /// Listen for download progress / completion / failure events.
+    /// One listener at a time, blocking on recv; the DownloadEvent
+    /// handler re-spawns it after each event (the same pattern as
+    /// the SMTC listener).
+    fn spawn_download_listener(&self, context: &ComponentContext<Self>) {
+        let Some(rx) = self.download_rx.clone() else {
+            return;
+        };
+        context.spawn_background(move |_| {
+            let event = data::runtime_handle().block_on(async {
+                let mut guard = rx.lock().await;
+                guard.recv().await
+            });
+            match event {
+                Some(event) => Message::DownloadEvent(event),
+                None => Message::Noop,
+            }
+        });
+    }
+
+    /// Resume every download that was Queued when the app loaded
+    /// (an interrupted download, or one queued while the app was
+    /// closed). Each song restarts its download task, resuming its
+    /// partial file.
+    fn resume_downloads(&self, context: &ComponentContext<Self>) {
+        let queued: Vec<crate::download::DownloadItem> = self
+            .downloads
+            .items
+            .values()
+            .filter(|item| item.status == DownloadStatus::Queued)
+            .cloned()
+            .collect();
+        for item in queued {
+            self.spawn_download_task(context, item);
+        }
+    }
+
+    /// Start one song's download task in the background.
+    fn spawn_download_task(
+        &self,
+        context: &ComponentContext<Self>,
+        item: crate::download::DownloadItem,
+    ) {
+        let Some(tx) = self.download_tx.clone() else {
+            return;
+        };
+        let download_dir = self.downloads.download_dir.clone();
+        context.spawn_background(move |_| {
+            let result =
+                data::runtime_handle().block_on(download::download_song(item, download_dir, tx));
+            match result {
+                Ok(()) => Message::Noop,
+                Err(_) => Message::Noop,
+            }
+        });
+    }
+
+    /// Start downloading a target: a single song, or every song in
+    /// an album / playlist / chart. The songs are fetched first
+    /// (for a collection), then each one is queued and its download
+    /// task started.
+    fn spawn_download_target(&self, context: &ComponentContext<Self>, target: DetailsTarget) {
+        let kind = target.kind.clone();
+        let id = target.id.clone();
+        context.spawn_background(move |_| {
+            let result = data::runtime_handle()
+                .block_on(async { fetch_songs_by_kind(&data::client(), &kind, &id).await });
+            match result {
+                Ok(songs) if !songs.is_empty() => Message::DownloadTargetReady(target, songs),
+                Ok(_) => Message::Noop,
+                Err(err) => Message::DownloadTargetFailed(target, err.to_string()),
             }
         });
     }

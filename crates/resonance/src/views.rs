@@ -59,6 +59,77 @@ pub fn section_header(title: &str) -> View {
         .into()
 }
 
+/// A circular download progress overlay, centered on an art tile:
+/// a determinate ring (the fraction downloaded) with a download
+/// arrow in the middle. When the total size is unknown the ring
+/// spins indeterminately instead.
+pub fn download_progress_overlay(size: f64, fraction: Option<f64>) -> View {
+    let ring = match fraction {
+        Some(fraction) => ProgressRing::new()
+            .width(size)
+            .height(size)
+            .minimum(0.0)
+            .maximum(1.0)
+            .value(fraction)
+            .is_indeterminate(false)
+            .is_active(true),
+        None => ProgressRing::new()
+            .width(size)
+            .height(size)
+            .is_indeterminate(true)
+            .is_active(true),
+    };
+    Grid::new().width(size).height(size).children((
+        ring,
+        SymbolIcon::new()
+            .symbol(Symbol::Download)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center),
+    ))
+}
+
+/// A small filled circle with a check — the "downloaded" mark
+/// shown at the start of a subtitle.
+pub fn downloaded_badge(size: f64) -> View {
+    Border::new()
+        .width(size)
+        .height(size)
+        .corner_radius(CornerRadius::uniform(size / 2.0))
+        .background(Brush::Theme(ThemeBrush::Accent))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::Accept)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+}
+
+/// A collection's download progress: a bar plus "X of Y songs".
+/// Shown on an album / playlist page while that collection is
+/// downloading. Returns `None` when the collection is not
+/// downloading.
+pub fn collection_download_progress(collection_id: &str, shell: &Shell) -> Option<View> {
+    let collection = shell.downloads.collection(collection_id)?;
+    if !shell.downloads.is_collection_downloading(collection_id) {
+        return None;
+    }
+    let fraction = shell.downloads.collection_fraction(collection_id)?;
+    let label = format!(
+        "Downloading {} of {} songs",
+        collection.completed_items, collection.total_items
+    );
+    Some(
+        StackPanel::new().spacing(4.0).children((
+            TextBlock::new().text(label).font_size(12.0).opacity(0.7),
+            ProgressBar::new()
+                .minimum(0.0)
+                .maximum(1.0)
+                .value(fraction)
+                .is_indeterminate(false),
+        )),
+    )
+}
+
 /// One section of media cards, Home-style: heading + up to 20 cards
 /// in one row (<= 10 items) or two rows (> 10 items), scrolling
 /// horizontally with the bar hidden. Shared by Home, Search and
@@ -256,6 +327,15 @@ pub fn media_card(
             .on_pointer_pressed(card_press(target.clone(), context))
             .content(art_view),
     )];
+    // A downloading song shows a circular progress ring with a
+    // download arrow in the middle, centered on the art.
+    if target.kind == "song" && shell.downloads.is_downloading(&target.id) {
+        let fraction = shell.downloads.item_fraction(&target.id);
+        art_children.push(KeyedView::new(
+            "download",
+            download_progress_overlay(size, fraction),
+        ));
+    }
     // Keep the hover buttons mounted while the context menu is open
     // for this card: opening the menu moves the pointer onto the
     // menu, which would otherwise fire PointerExited and yank the
@@ -298,6 +378,32 @@ pub fn media_card(
         ));
     }
     let hover_id = target.id.clone();
+    // The subtitle (artist / description line). A downloaded song
+    // gets a filled circle check at the start of the subtitle.
+    let subtitle: View = if target.kind == "song" && shell.downloads.is_downloaded(&target.id) {
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(4.0)
+            .margin(4.0)
+            .children((
+                downloaded_badge(14.0),
+                TextBlock::new()
+                    .text(target.subtitle.clone())
+                    .font_size(12.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::Wrap)
+                    .max_lines(2),
+            ))
+    } else {
+        TextBlock::new()
+            .text(target.subtitle.clone())
+            .font_size(12.0)
+            .opacity(0.7)
+            .text_wrapping(TextWrapping::Wrap)
+            .max_lines(2)
+            .margin(4.0)
+            .into()
+    };
     Border::new()
         .width(size)
         // A navigation-like hover background: a card fill while the
@@ -336,13 +442,7 @@ pub fn media_card(
                                     .text_wrapping(TextWrapping::Wrap)
                                     .max_lines(2)
                                     .margin(4.0),
-                                TextBlock::new()
-                                    .text(target.subtitle.clone())
-                                    .font_size(12.0)
-                                    .opacity(0.7)
-                                    .text_wrapping(TextWrapping::Wrap)
-                                    .max_lines(2)
-                                    .margin(4.0),
+                                subtitle,
                             )),
                         ),
                 )),
@@ -471,18 +571,21 @@ pub fn context_menu(
 ) -> Menu {
     let play_target = target.clone();
     let next_target = target.clone();
+    let download_target = target.clone();
     let props_target = target.clone();
     let pin_target = target.clone();
     Menu::new(
         [
             MenuItem::item("play", "Play"),
             MenuItem::item("playnext", "Play next"),
+            MenuItem::item("download", "Download"),
             MenuItem::item("properties", "Properties"),
             MenuItem::item("pin", if is_pinned { "Unpin" } else { "Pin" }),
         ],
         context.callback(move |label: String| match label.as_str() {
             "Play" => Message::MenuPlay(play_target.clone()),
             "Play next" => Message::MenuPlayNext(next_target.clone()),
+            "Download" => Message::DownloadTarget(download_target.clone()),
             "Properties" => Message::MenuProperties(props_target.clone()),
             "Pin" | "Unpin" => Message::TogglePin(pin_target.clone()),
             _ => Message::Noop,
@@ -494,16 +597,17 @@ pub fn context_menu(
 /// 64x64 circular Play button (filled primary, Play icon centered),
 /// a shuffle icon button (icon only, no container), a circular like
 /// button (a plus in a 32px circle outline, or a check in a filled
-/// primary circle when already liked), a download button (icon only,
-/// in a 32px circle — a placeholder, the download feature is still
-/// under discussion), and a horizontal more icon button (icon only,
-/// no container) that opens the item's context menu. The icons in
-/// the circular buttons are centered, with padding between the icon
-/// and the circle, and the icon and the circle stroke are the same
-/// color and the same weight (the theme's primary text color, 2px).
-/// `like` is `Some((liked, toggle, hover_id))` for items that can be
-/// liked (album, playlist, song, artist) and `None` when the item
-/// has no like.
+/// primary circle when already liked), a download button (a
+/// download icon in a 32px circle — a check in a filled primary
+/// circle once downloaded, dimmed while downloading), and a
+/// horizontal more icon button (icon only, no container) that opens
+/// the item's context menu. The icons in the circular buttons are
+/// centered, with padding between the icon and the circle, and the
+/// icon and the circle stroke are the same color and the same
+/// weight (the theme's primary text color, 2px). `like` is
+/// `Some((liked, toggle, hover_id))` for items that can be liked
+/// (album, playlist, song, artist) and `None` when the item has no
+/// like.
 pub fn details_action_row(
     songs: &[Song],
     like: Option<(bool, Message, String)>,
@@ -564,23 +668,64 @@ pub fn details_action_row(
     // and the circle, the icon and the circle stroke the same color
     // and the same weight. A placeholder for now; the download
     // feature is still under discussion, so it does nothing yet.
-    let download_button = Border::new()
-        .width(32.0)
-        .height(32.0)
-        .corner_radius(CornerRadius::uniform(16.0))
-        .background(Brush::Solid(Color::transparent()))
-        .border_thickness(2.0)
-        .border_brush(Brush::Theme(ThemeBrush::PrimaryText))
-        .opacity(0.7)
-        .vertical_alignment(VerticalAlignment::Center)
-        .on_pointer_pressed(context.callback(|_info: PointerEventInfo| Message::Noop))
-        .content(
-            SymbolIcon::new()
-                .symbol(Symbol::Download)
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
-        .tooltip("Download");
+    // The Download button: starts downloading this song (or the
+    // whole album / playlist / chart). Once downloaded it becomes
+    // a filled circle with a check; while downloading it is dimmed
+    // and inert (progress shows on the art).
+    let downloaded = if target.kind == "song" {
+        shell.downloads.is_downloaded(&target.id)
+    } else {
+        shell
+            .downloads
+            .collection(&target.id)
+            .is_some_and(|c| c.status == crate::download::DownloadStatus::Completed)
+    };
+    let downloading = if target.kind == "song" {
+        shell.downloads.is_downloading(&target.id)
+    } else {
+        shell.downloads.is_collection_downloading(&target.id)
+    };
+    let target_for_download = target.clone();
+    let download_button = if downloaded {
+        Border::new()
+            .width(32.0)
+            .height(32.0)
+            .corner_radius(CornerRadius::uniform(16.0))
+            .background(Brush::Theme(ThemeBrush::Accent))
+            .vertical_alignment(VerticalAlignment::Center)
+            .on_pointer_pressed(context.callback(|_info: PointerEventInfo| Message::Noop))
+            .content(
+                SymbolIcon::new()
+                    .symbol(Symbol::Accept)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            )
+            .tooltip("Downloaded")
+    } else {
+        Border::new()
+            .width(32.0)
+            .height(32.0)
+            .corner_radius(CornerRadius::uniform(16.0))
+            .background(Brush::Solid(Color::transparent()))
+            .border_thickness(2.0)
+            .border_brush(Brush::Theme(ThemeBrush::PrimaryText))
+            .opacity(if downloading { 0.4 } else { 0.7 })
+            .vertical_alignment(VerticalAlignment::Center)
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if downloading || !info.is_left_button_pressed {
+                    Message::Noop
+                } else {
+                    Message::DownloadTarget(target_for_download.clone())
+                }
+            }))
+            .content(
+                SymbolIcon::new()
+                    .symbol(Symbol::Download)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            )
+            .tooltip("Download")
+    };
     // The More button: a real WinUI Button carrying a native
     // context menu (MenuFlyout). A click opens the real menu; the
     // menu reports the chosen item's label, which the helper maps
@@ -717,6 +862,15 @@ pub fn song_row(
             ),
     };
     let mut art_children: Vec<KeyedView> = vec![KeyedView::new("art", art_border)];
+    // A downloading song shows a circular progress ring with a
+    // download arrow in the middle, centered on the art.
+    if shell.downloads.is_downloading(&song.id) {
+        let fraction = shell.downloads.item_fraction(&song.id);
+        art_children.push(KeyedView::new(
+            "download",
+            download_progress_overlay(48.0, fraction),
+        ));
+    }
     if hovered {
         let play_queue = queue.to_vec();
         art_children.push(KeyedView::new(
@@ -749,6 +903,30 @@ pub fn song_row(
         .grid_column(0)
         .keyed_children(art_children);
 
+    // The subtitle (artist line). A downloaded song gets a filled
+    // circle check at the start of the subtitle.
+    let subtitle: View = if shell.downloads.is_downloaded(&song.id) {
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(4.0)
+            .children((
+                downloaded_badge(14.0),
+                TextBlock::new()
+                    .text(artist_names(song))
+                    .font_size(12.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::Wrap)
+                    .max_lines(2),
+            ))
+    } else {
+        TextBlock::new()
+            .text(artist_names(song))
+            .font_size(12.0)
+            .opacity(0.7)
+            .text_wrapping(TextWrapping::Wrap)
+            .max_lines(2)
+            .into()
+    };
     let title_panel = StackPanel::new()
         .margin(12.0)
         .vertical_alignment(VerticalAlignment::Center)
@@ -760,12 +938,7 @@ pub fn song_row(
                 .font_weight(FontWeight::SEMI_BOLD)
                 .text_wrapping(TextWrapping::Wrap)
                 .max_lines(2),
-            TextBlock::new()
-                .text(artist_names(song))
-                .font_size(12.0)
-                .opacity(0.7)
-                .text_wrapping(TextWrapping::Wrap)
-                .max_lines(2),
+            subtitle,
         ));
     // The full form: favorite before the duration, with a gap
     // between them, and the favorite only shows while hovered. The
