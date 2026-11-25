@@ -128,6 +128,9 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   inside a 1px circle outline, greyish until hovered; already liked,
   a check inside a filled circle in the framework's primary color
   (Accent), always full contrast. Both read in dark and light mode.
+  The circle is 32px with a ~16px icon, so there is padding between
+  the icon and the circle, and the circle stroke is 2px — the same
+  color and the same weight as the icon's strokes.
 - **Details action row** — under a details header, left to right: a
   64x64 circular Play button (filled primary, Play icon centered),
   a shuffle icon button (icon only, no container), a circular like
@@ -136,11 +139,12 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
   circle — a placeholder, the download feature is still under
   discussion), and a horizontal more icon button (icon only, no
   container) that opens the item's context menu. The icons in the
-  circular buttons are centered, and the icon and the circle stroke
-  are the same color (the theme's primary text color). The artist
-  page has no like button (artists can't be liked), so its row is
-  Play, shuffle, download, more. Shuffle plays the item's songs in
-  a shuffled order.
+  circular buttons are centered, with padding between the icon and
+  the circle, and the icon and the circle stroke are the same color
+  and the same weight (the theme's primary text color, 2px). Artists
+  can be liked too — the artist page has the same circular like
+  button, and liked artists show in the Library under "Liked
+  artists". Shuffle plays the item's songs in a shuffled order.
 - **Lyrics** — the song details page shows a song's lyrics when the
   API has them. It currently has no entry point since the player
   bar's lyrics button was removed. No connect-to-device, miniplayer,
@@ -208,7 +212,7 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Queue | Live — the queue panel over the Now Playing sidebar (from its Show full queue button); playing a row starts the queue there; song titles wrap |
 | Now Playing | Live — an opaque 340px sidebar on the right (a solid fill, so the page never bleeds through it). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which appears at once; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |
 | Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
-| Library | Live — liked songs, recently played, liked albums/playlists (persisted locally), all as Home-style media-card sections; albums and playlists land here via the Like button on their pages |
+| Library | Live — liked songs, recently played, liked albums/playlists/artists (persisted locally), all as Home-style media-card sections; albums, playlists and artists land here via the Like button on their pages |
 | Settings | Live — theme, window material (Acrylic default), stream quality, autoplay, about |
 
 ## Layout

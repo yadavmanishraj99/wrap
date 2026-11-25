@@ -192,6 +192,7 @@ pub enum Message {
     ToggleLike(Song),
     ToggleLikeAlbum(Album),
     ToggleLikePlaylist(Playlist),
+    ToggleLikeArtist(Artist),
     PlayByKind(String, String),
     OpenDetails(DetailsTarget),
     DetailsLoaded(u64, Result<DetailsContent, String>),
@@ -988,6 +989,9 @@ impl Component for Shell {
             }
             Message::ToggleLikePlaylist(playlist) => {
                 self.library.toggle_like_playlist(playlist);
+            }
+            Message::ToggleLikeArtist(artist) => {
+                self.library.toggle_like_artist(artist);
             }
             Message::PlayByKind(kind, id) => {
                 spawn_play_by_kind(context, kind, id);

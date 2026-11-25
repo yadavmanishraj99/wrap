@@ -367,18 +367,22 @@ fn hover_button(
 }
 
 /// A small circular like button. When not liked, it is Add (plus)
-/// inside a 24px circle outline (a 1px border, transparent
-/// background); the icon is ~16px. When already liked, it is a check
-/// inside a filled circle, the fill being the framework's primary
-/// color (Accent — the same primary the play button uses; #1ed760
-/// Spotify green is the fallback if the framework ever stopped
-/// providing one). The not-liked button is greyish when the pointer
-/// is not over it (low opacity) and goes to full contrast on hover;
-/// the liked button is always full contrast, so the liked state is
-/// unmistakable. The colors use the theme's foreground and stroke,
-/// dimmed by opacity, so they read in both dark mode (white dimmed
-/// over the dark page) and light mode (black dimmed over the light
-/// page) — no hardcoded grey that would vanish on one theme.
+/// inside a 32px circle outline (a 2px border, transparent
+/// background); the icon inside is ~16px, so there is padding
+/// between the icon and the circle. When already liked, it is a
+/// check inside a filled circle, the fill being the framework's
+/// primary color (Accent — the same primary the play button uses;
+/// #1ed760 Spotify green is the fallback if the framework ever
+/// stopped providing one). The circle stroke is the same color and
+/// the same weight as the icon's strokes (the theme's primary text
+/// color, 2px), so the button and its circle read as one unit. The
+/// not-liked button is greyish when the pointer is not over it (low
+/// opacity) and goes to full contrast on hover; the liked button is
+/// always full contrast, so the liked state is unmistakable. The
+/// colors use the theme's foreground and stroke, dimmed by opacity,
+/// so they read in both dark mode (white dimmed over the dark page)
+/// and light mode (black dimmed over the light page) — no hardcoded
+/// grey that would vanish on one theme.
 /// `None` renders an inert greyed-out Add (no song to like yet).
 pub fn like_button(
     song: Option<&Song>,
@@ -399,9 +403,9 @@ pub fn like_button(
     // button is always full contrast; the not-liked one is greyish
     // until hovered.
     let mut border = Border::new()
-        .width(24.0)
-        .height(24.0)
-        .corner_radius(CornerRadius::uniform(12.0))
+        .width(32.0)
+        .height(32.0)
+        .corner_radius(CornerRadius::uniform(16.0))
         .background(if liked {
             Brush::Theme(ThemeBrush::Accent)
         } else {
@@ -412,10 +416,9 @@ pub fn like_button(
         .grid_column(grid_column);
     if !liked {
         border = border
-            .border_thickness(1.0)
-            // The circle stroke is the same color as the icon (the
-            // theme's primary text color), so the button and its
-            // circle read as one unit.
+            // A 2px stroke, the same weight as the icon's strokes,
+            // and the same color as the icon (primary text).
+            .border_thickness(2.0)
             .border_brush(Brush::Theme(ThemeBrush::PrimaryText));
     }
     if let Some(song) = song {
@@ -451,15 +454,17 @@ pub fn like_button(
 /// The action row under a details header, left to right: a large
 /// 64x64 circular Play button (filled primary, Play icon centered),
 /// a shuffle icon button (icon only, no container), a circular like
-/// button (a plus in a circle outline, or a check in a filled
+/// button (a plus in a 32px circle outline, or a check in a filled
 /// primary circle when already liked), a download button (icon only,
-/// in a circle — a placeholder, the download feature is still under
-/// discussion), and a horizontal more icon button (icon only, no
-/// container) that opens the item's context menu. The icons in the
-/// circular buttons are centered, and the icon and the circle stroke
-/// are the same color (the theme's primary text color). `like` is
-/// `Some((liked, toggle, hover_id))` for items that can be liked
-/// (album, playlist, song) and `None` for artist, which has no like.
+/// in a 32px circle — a placeholder, the download feature is still
+/// under discussion), and a horizontal more icon button (icon only,
+/// no container) that opens the item's context menu. The icons in
+/// the circular buttons are centered, with padding between the icon
+/// and the circle, and the icon and the circle stroke are the same
+/// color and the same weight (the theme's primary text color, 2px).
+/// `like` is `Some((liked, toggle, hover_id))` for items that can be
+/// liked (album, playlist, song, artist) and `None` when the item
+/// has no like.
 pub fn details_action_row(
     songs: &[Song],
     like: Option<(bool, Message, String)>,
@@ -515,16 +520,17 @@ pub fn details_action_row(
                 .vertical_alignment(VerticalAlignment::Center),
         )
         .tooltip("Shuffle");
-    // Download: icon only, in a circle — a 24px outline circle with
-    // the icon centered, the icon and the circle stroke the same
-    // color. A placeholder for now; the download feature is still
-    // under discussion, so it does nothing yet.
+    // Download: icon only, in a circle — a 32px outline circle
+    // with the icon centered, so there is padding between the icon
+    // and the circle, the icon and the circle stroke the same color
+    // and the same weight. A placeholder for now; the download
+    // feature is still under discussion, so it does nothing yet.
     let download_button = Border::new()
-        .width(24.0)
-        .height(24.0)
-        .corner_radius(CornerRadius::uniform(12.0))
+        .width(32.0)
+        .height(32.0)
+        .corner_radius(CornerRadius::uniform(16.0))
         .background(Brush::Solid(Color::transparent()))
-        .border_thickness(1.0)
+        .border_thickness(2.0)
         .border_brush(Brush::Theme(ThemeBrush::PrimaryText))
         .opacity(0.7)
         .vertical_alignment(VerticalAlignment::Center)
@@ -572,9 +578,9 @@ pub fn details_action_row(
         // always full contrast.
         let like_hovered = shell.hovered_like.as_deref() == Some(hover_id.as_str());
         let mut border = Border::new()
-            .width(24.0)
-            .height(24.0)
-            .corner_radius(CornerRadius::uniform(12.0))
+            .width(32.0)
+            .height(32.0)
+            .corner_radius(CornerRadius::uniform(16.0))
             .background(if liked {
                 Brush::Theme(ThemeBrush::Accent)
             } else {
@@ -584,7 +590,9 @@ pub fn details_action_row(
             .vertical_alignment(VerticalAlignment::Center);
         if !liked {
             border = border
-                .border_thickness(1.0)
+                // A 2px stroke, the same weight as the icon's
+                // strokes, and the same color as the icon.
+                .border_thickness(2.0)
                 .border_brush(Brush::Theme(ThemeBrush::PrimaryText));
         }
         let hover_id_enter = hover_id.clone();

@@ -3,7 +3,7 @@
 
 use windows_reactor::*;
 
-use crate::app::{DetailsContent, DetailsTarget, Shell};
+use crate::app::{DetailsContent, DetailsTarget, Message, Shell};
 use crate::views;
 
 pub fn view(
@@ -18,6 +18,8 @@ pub fn view(
             .margin(24.0)
             .into();
     };
+    let liked = shell.library.is_artist_liked(&artist.id);
+    let artist_for_like = artist.clone();
     let art_content: View = match &content.art {
         Some(url) => views::image_from_url(url)
             .width(200.0)
@@ -58,7 +60,17 @@ pub fn view(
                         .font_size(14.0)
                         .opacity(0.7)
                         .text_wrapping(TextWrapping::Wrap),
-                    views::details_action_row(&content.songs, None, target, shell, context),
+                    views::details_action_row(
+                        &content.songs,
+                        Some((
+                            liked,
+                            Message::ToggleLikeArtist(artist_for_like),
+                            artist.id.clone(),
+                        )),
+                        target,
+                        shell,
+                        context,
+                    ),
                 )),
         ));
 

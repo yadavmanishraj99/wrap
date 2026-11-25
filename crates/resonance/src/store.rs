@@ -1,12 +1,12 @@
-//! Persisted state: the library (liked songs/albums/playlists,
-//! recents) and settings, as JSON under `%LOCALAPPDATA%\Resonance`.
-//! All loads are best-effort — a missing or corrupt file yields
-//! defaults, never an error.
+//! Persisted state: the library (liked songs/albums/playlists/
+//! artists, recents) and settings, as JSON under
+//! `%LOCALAPPDATA%\Resonance`. All loads are best-effort — a missing
+//! or corrupt file yields defaults, never an error.
 
 use std::fs;
 use std::path::PathBuf;
 
-use saavnapi::{Album, Playlist, Song};
+use saavnapi::{Album, Artist, Playlist, Song};
 use serde::{Deserialize, Serialize};
 
 pub fn app_dir() -> PathBuf {
@@ -152,6 +152,10 @@ pub struct Library {
     pub liked_songs: Vec<Song>,
     pub liked_albums: Vec<Album>,
     pub liked_playlists: Vec<Playlist>,
+    /// `#[serde(default)]` so a library.json written before artist
+    /// liking existed still loads.
+    #[serde(default)]
+    pub liked_artists: Vec<Artist>,
     pub recent_songs: Vec<Song>,
     /// Pinned media items, in pin order (first pinned at the top of
     /// the sidebar section). `#[serde(default)]` so a library.json
@@ -221,6 +225,24 @@ impl Library {
             false
         } else {
             self.liked_playlists.push(playlist);
+            self.save();
+            true
+        }
+    }
+
+    /// Is this artist liked?
+    pub fn is_artist_liked(&self, artist_id: &str) -> bool {
+        self.liked_artists.iter().any(|a| a.id == artist_id)
+    }
+
+    /// Toggle an artist in liked artists. Returns the new liked state.
+    pub fn toggle_like_artist(&mut self, artist: Artist) -> bool {
+        if let Some(pos) = self.liked_artists.iter().position(|a| a.id == artist.id) {
+            self.liked_artists.remove(pos);
+            self.save();
+            false
+        } else {
+            self.liked_artists.push(artist);
             self.save();
             true
         }

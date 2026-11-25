@@ -1,11 +1,11 @@
-//! Library page: liked songs, recently played, liked albums and
-//! liked playlists, persisted locally in
+//! Library page: liked songs, recently played, liked albums, liked
+//! playlists and liked artists, persisted locally in
 //! `%LOCALAPPDATA%\Resonance\library.json`. Every section is a
-//! Home-style row of media cards — song cards play, album and
-//! playlist cards open their pages. Albums and playlists land here
-//! via the Like button on their pages.
+//! Home-style row of media cards — song cards play, album, playlist
+//! and artist cards open their pages. Albums, playlists and artists
+//! land here via the Like button on their pages.
 
-use saavnapi::{Album, Playlist, Song};
+use saavnapi::{Album, Artist, Playlist, Song};
 use windows_reactor::*;
 
 use crate::app::{DetailsTarget, Shell};
@@ -82,6 +82,22 @@ fn playlist_targets(playlists: &[Playlist]) -> Vec<DetailsTarget> {
         .collect()
 }
 
+fn artist_targets(artists: &[Artist]) -> Vec<DetailsTarget> {
+    artists
+        .iter()
+        .map(|artist| DetailsTarget {
+            kind: "artist".to_string(),
+            id: artist.id.clone(),
+            title: artist.name.clone(),
+            subtitle: artist
+                .follower_count
+                .map(|count| format!("{count} followers"))
+                .unwrap_or_default(),
+            art: views::art_url(&artist.image, "500x500"),
+        })
+        .collect()
+}
+
 pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     // A details drill-in is an inner route of this page: when one
     // is open it renders here, inside the page, instead of the
@@ -125,6 +141,14 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                     "Liked playlists",
                     &playlist_targets(&shell.library.liked_playlists),
                     "No liked playlists yet — tap Like on any playlist page.",
+                    shell,
+                    context,
+                ),
+                card_section_or_empty(
+                    "artists",
+                    "Liked artists",
+                    &artist_targets(&shell.library.liked_artists),
+                    "No liked artists yet — tap Like on any artist page.",
                     shell,
                     context,
                 ),
