@@ -134,14 +134,16 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 - **Pinning** — any song, artist, album, playlist, or chart can be
   pinned from its card's context menu (Pin / Unpin). Pinned items
   appear in the sidebar below a divider after Library, in pin order,
-  each as a row with its art (28px) + title only (no subtitle). They persist
+  each as a row with its art (28px) + title only (no subtitle), the
+  title at 14px, the same size as the nav items. They persist
   in `library.json`. A pinned row is a shortcut, not a page: clicking
   it never changes the nav selection. A pinned song plays on click
   (its full Song is fetched by id first); any other pinned item opens
   its details page. The divider shows only while pinned items exist.
   Reactor 0.100 has no NavigationViewItemSeparator, so the divider is
   a NavigationViewItem with a 1px line as its content and
-  `selects_on_invoked(false)`.
+  `selects_on_invoked(false)`; the line runs end to end, left to
+  right (no horizontal margin).
 - **Playback disposal** — when a track starts, the previous track's
   `MediaSource` is closed explicitly (`Close()` releases its stream
   and network resources at once) instead of leaving it to COM

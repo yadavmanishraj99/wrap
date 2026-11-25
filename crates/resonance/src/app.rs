@@ -487,7 +487,8 @@ fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
 /// The divider after Library: a 1px line in a nav-item row. It is a
 /// NavigationViewItem (Reactor 0.100 has no NavigationViewItemSeparator)
 /// with `selects_on_invoked(false)`, so clicking it never selects
-/// anything. Shown only while pinned items exist.
+/// anything. The line runs end to end, left to right — no horizontal
+/// margin, only vertical spacing. Shown only while pinned items exist.
 fn nav_divider() -> KeyedView {
     KeyedView::new(
         "pinned-divider".to_string(),
@@ -498,7 +499,7 @@ fn nav_divider() -> KeyedView {
                 Border::new()
                     .height(1.0)
                     .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .margin(Thickness::new(12.0, 8.0, 12.0, 8.0))
+                    .margin(Thickness::new(0.0, 8.0, 0.0, 8.0))
                     .background(Brush::Theme(ThemeBrush::CardStroke)),
             )]),
     )
@@ -538,7 +539,7 @@ fn pinned_nav_item(pinned: &PinnedItem, context: &mut ViewContext<Shell>) -> Key
     };
     let title = TextBlock::new()
         .text(item.title.clone())
-        .font_size(12.0)
+        .font_size(14.0)
         .vertical_alignment(VerticalAlignment::Center)
         .text_wrapping(TextWrapping::NoWrap)
         .text_trimming(TextTrimming::CharacterEllipsis)
