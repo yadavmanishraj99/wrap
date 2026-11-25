@@ -46,7 +46,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         ))
     } else if let Some(err) = &shell.search_error {
         TextBlock::new()
-            .text(format!("Search failed: {err}"))
+            .text(err.clone())
             .font_size(14.0)
             .opacity(0.7)
             .into()

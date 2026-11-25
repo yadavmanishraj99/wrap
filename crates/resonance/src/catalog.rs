@@ -476,6 +476,149 @@ impl Catalog {
     /// The individually downloaded songs — the members of the
     /// auto "Downloads" collection that are completed, most
     /// recently touched first.
+    /// A downloaded song rebuilt for the player, when the song
+    /// is in the catalog and its file is on disk. This is what
+    /// makes a pinned / library / card song play offline: no
+    /// network fetch, the player takes the local file.
+    pub fn downloaded_song(&self, song_id: &str) -> Option<saavnapi::Song> {
+        let row = self.media.get(song_id)?;
+        if row.status != MediaStatus::Completed {
+            return None;
+        }
+        Some(row.to_song(&self.download_dir))
+    }
+
+    /// The playable (downloaded) songs for a play request: for
+    /// a song, itself when downloaded; for a collection, its
+    /// downloaded members in track order. Empty when nothing
+    /// playable is stored — the caller then tries the network
+    /// (or reports that it cannot play offline).
+    pub fn playable_songs(&self, kind: &str, id: &str) -> Vec<saavnapi::Song> {
+        if kind == "song" {
+            return self.downloaded_song(id).into_iter().collect();
+        }
+        self.collection_song_ids(id)
+            .iter()
+            .filter_map(|song_id| self.downloaded_song(song_id))
+            .collect()
+    }
+
+    /// Search the local catalog — the offline search. Matches
+    /// media and collections by title / artist text and returns
+    /// them in the `search_all` shape, so the Search page
+    /// renders them like live results (downloaded songs first,
+    /// since those are the ones that can actually play).
+    pub fn search_local(&self, query: &str) -> saavnapi::SearchAll {
+        let needle = query.trim().to_lowercase();
+        let matches = |text: &str| !needle.is_empty() && text.to_lowercase().contains(&needle);
+        let image_of = |art: &Option<String>, cover_id: &str| -> Vec<saavnapi::DownloadLink> {
+            let url = self
+                .cover_uri(cover_id)
+                .or_else(|| art.clone())
+                .unwrap_or_default();
+            vec![saavnapi::DownloadLink {
+                quality: "500x500".to_string(),
+                url,
+            }]
+        };
+
+        let mut media: Vec<&MediaRow> = self
+            .media
+            .values()
+            .filter(|row| matches(&row.title) || matches(&row.artist))
+            .collect();
+        // Downloaded first (playable offline), then most
+        // recently touched.
+        media.sort_by(|a, b| {
+            let rank = |row: &MediaRow| row.status != MediaStatus::Completed;
+            rank(a).cmp(&rank(b)).then(b.updated_at.cmp(&a.updated_at))
+        });
+        let songs: Vec<saavnapi::SearchHit> = media
+            .iter()
+            .take(20)
+            .map(|row| saavnapi::SearchHit {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                image: image_of(&row.art, &row.cover_id),
+                album: row.album.clone(),
+                url: None,
+                kind: Some("song".to_string()),
+                language: Some(row.language.clone()),
+                description: None,
+                primary_artists: Some(row.artist.clone()),
+                singers: None,
+            })
+            .collect();
+
+        let mut collections: Vec<&CollectionRow> = self
+            .collections
+            .values()
+            .filter(|row| row.id != DOWNLOADS_ID)
+            .filter(|row| matches(&row.title) || matches(&row.subtitle))
+            .collect();
+        collections.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+        let mut albums: Vec<saavnapi::SearchAlbumHit> = Vec::new();
+        let mut artists: Vec<saavnapi::SearchArtistHit> = Vec::new();
+        let mut playlists: Vec<saavnapi::SearchPlaylistHit> = Vec::new();
+        for row in collections.into_iter().take(20) {
+            match row.kind.as_str() {
+                "album" => albums.push(saavnapi::SearchAlbumHit {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    image: image_of(&row.art, &row.cover_id),
+                    artist: Some(artist_line(&row.artists)),
+                    url: None,
+                    kind: Some("album".to_string()),
+                    description: row.description.clone(),
+                    year: row.year.map(|y| y.to_string()),
+                    song_ids: None,
+                    language: Some(row.language.clone()),
+                }),
+                "artist" => artists.push(saavnapi::SearchArtistHit {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    image: image_of(&row.art, &row.cover_id),
+                    kind: Some("artist".to_string()),
+                    description: Some(row.subtitle.clone()),
+                    position: None,
+                }),
+                _ => playlists.push(saavnapi::SearchPlaylistHit {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    image: image_of(&row.art, &row.cover_id),
+                    url: None,
+                    kind: Some(row.kind.clone()),
+                    language: Some(row.language.clone()),
+                    description: row.description.clone(),
+                }),
+            }
+        }
+
+        let top = songs.first().cloned().into_iter().collect();
+        saavnapi::SearchAll {
+            top_query: saavnapi::SearchSection {
+                results: top,
+                position: 0,
+            },
+            songs: saavnapi::SearchSection {
+                results: songs,
+                position: 1,
+            },
+            albums: saavnapi::SearchSection {
+                results: albums,
+                position: 2,
+            },
+            artists: saavnapi::SearchSection {
+                results: artists,
+                position: 3,
+            },
+            playlists: saavnapi::SearchSection {
+                results: playlists,
+                position: 4,
+            },
+        }
+    }
+
     pub fn downloaded_songs(&self) -> Vec<MediaRow> {
         let mut members: Vec<&MemberRow> = self
             .members

@@ -49,14 +49,14 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
             views::skeleton_section(shell, "New albums", 5),
             views::skeleton_section(shell, "Charts", 5),
         ))
-    } else if let Some(err) = &shell.home_error {
+    } else if shell.home_error.is_some() {
         StackPanel::new().margin(24.0).spacing(12.0).children((
             TextBlock::new()
                 .text("Home")
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
             TextBlock::new()
-                .text(format!("Couldn't load Home: {err}"))
+                .text("Couldn't load Home. Check your connection and try again.")
                 .font_size(14.0)
                 .opacity(0.7),
             Button::new()

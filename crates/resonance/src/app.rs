@@ -25,6 +25,7 @@ use std::time::Duration;
 use saavnapi::{Album, Artist, ArtistArgs, LaunchData, Playlist, SearchAll, Song};
 use windows_reactor::*;
 
+use crate::cache;
 use crate::catalog::{self, Catalog, DownloadEvent};
 use crate::data;
 use crate::pages;
@@ -61,7 +62,7 @@ pub struct DetailsTarget {
 /// a song detail (for the like button); `lyrics` only for songs.
 /// `album` / `artist` / `playlist` carry the full model for the
 /// matching kind, so each page can render its own layout.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DetailsContent {
     pub song: Option<Song>,
     pub songs: Vec<Song>,
@@ -153,6 +154,12 @@ pub struct Shell {
     /// The catalog: every song / collection the app knows about
     /// (liked, pinned, recent, downloaded), persisted in SQLite.
     pub catalog: Catalog,
+    /// The page data cache (Home / details / search), file-based:
+    /// pages open from it instantly and refresh in the background.
+    pub cache: cache::Cache,
+    /// A plain-language message shown in a dialog (e.g. a play
+    /// request that cannot work offline). Never technical text.
+    pub notice: Option<String>,
     pub settings: Settings,
     pub player: Player,
     /// The SMTC button channel's receiving end, shared with the
@@ -238,6 +245,14 @@ pub enum Message {
     /// downloaded from), or a whole collection's download.
     DeleteDownload(DetailsTarget),
     PlayNext(Vec<Song>),
+    /// A play fetch (pinned song / card / collection) failed:
+    /// fall back to the catalog's downloaded songs, or explain
+    /// in plain language why it cannot play right now.
+    PlayFetchFailed(String, String),
+    /// A Play next fetch failed: quietly queue the downloaded
+    /// songs from the catalog instead, when there are any.
+    PlayNextFetchFailed(String, String),
+    CloseNotice,
     PropertiesLoaded(Result<DetailsContent, String>),
     CloseProperties,
     ToggleNowPlaying,
@@ -308,29 +323,48 @@ async fn fetch_songs_by_kind(
     }
 }
 
+/// The plain-language explanation shown when a play request
+/// cannot work: nothing playable is downloaded and the fetch
+/// failed (no connection, most likely). Written for the user —
+/// never technical text.
+fn offline_play_notice(kind: &str) -> String {
+    let noun = match kind {
+        "album" => "This album",
+        "artist" => "This artist's songs",
+        "playlist" | "chart" => "This playlist",
+        _ => "This song",
+    };
+    format!(
+        "{noun} isn't downloaded, and you're offline. Connect to the internet to play it, or download it first for offline listening."
+    )
+}
+
 /// Fetch a song/album/playlist/artist's songs in the background and
-/// start the queue at the first song. Failures are silent (Noop).
+/// start the queue at the first song. A failure comes back as
+/// PlayFetchFailed, so the Shell can fall back to the catalog.
 fn spawn_play_by_kind(context: &ComponentContext<Shell>, kind: String, id: String) {
     context.spawn_background(move |_| {
         let result = data::runtime_handle()
             .block_on(async { fetch_songs_by_kind(&data::client(), &kind, &id).await });
         match result {
             Ok(queue) if !queue.is_empty() => Message::PlaySong(queue, 0),
-            _ => Message::Noop,
+            _ => Message::PlayFetchFailed(kind, id),
         }
     });
 }
 
 /// Fetch one pinned song by id and play it. A pinned song's sidebar
 /// row only stores the id, so the full Song (with its stream URLs)
-/// is fetched on click. Failures are silent (Noop).
+/// is fetched on click — unless it is already downloaded, in which
+/// case the PlayPinnedSong handler plays the catalog copy without
+/// any fetch. A failure comes back as PlayFetchFailed.
 fn spawn_play_pinned_song(context: &ComponentContext<Shell>, id: String) {
     context.spawn_background(move |_| {
         let result = data::runtime_handle()
             .block_on(async { data::client().get_songs_by_ids(&[id.as_str()]).await });
         match result {
             Ok(songs) if !songs.is_empty() => Message::PlaySong(songs, 0),
-            _ => Message::Noop,
+            _ => Message::PlayFetchFailed("song".to_string(), id),
         }
     });
 }
@@ -343,7 +377,7 @@ fn spawn_play_next_by_kind(context: &ComponentContext<Shell>, kind: String, id: 
             .block_on(async { fetch_songs_by_kind(&data::client(), &kind, &id).await });
         match result {
             Ok(queue) if !queue.is_empty() => Message::PlayNext(queue),
-            _ => Message::Noop,
+            _ => Message::PlayNextFetchFailed(kind, id),
         }
     });
 }
@@ -847,8 +881,17 @@ impl Component for Shell {
         let download_rx = Some(Arc::new(tokio::sync::Mutex::new(download_rx)));
         let download_tx = Some(download_tx);
 
-        // Home data loads in the background as the shell opens.
-        spawn_home_load(context);
+        // The page cache: Home opens from it instantly when it
+        // exists (offline-first); a fetch runs only when there
+        // is no cache yet or the cached copy is stale.
+        let cache = cache::Cache::load(&app_dir);
+        let cached_home = cache.get::<LaunchData>(cache::home_key(), cache::HOME_TTL_MS);
+        let home_fresh = matches!(&cached_home, Some((_, true)));
+        let home = cached_home.map(|(data, _)| data);
+        let home_loading = home.is_none();
+        if !home_fresh {
+            spawn_home_load(context);
+        }
 
         let shell = Self {
             page: Page::Home,
@@ -867,13 +910,15 @@ impl Component for Shell {
             search_text: String::new(),
             search_debounce_seq: 0,
             search_suggestions: Vec::new(),
-            home: None,
-            home_loading: true,
+            home,
+            home_loading,
             home_error: None,
             search_all: None,
             search_loading: false,
             search_error: None,
             catalog,
+            cache,
+            notice: None,
             settings,
             player,
             smtc_rx,
@@ -943,6 +988,7 @@ impl Component for Shell {
                     }
                     self.search_loading = true;
                     self.search_error = None;
+                    self.search_all = None;
                     // Debounced: the search only fires once typing
                     // has paused for ~300ms, so a burst sends one
                     // call instead of one per keystroke. The seq
@@ -964,11 +1010,7 @@ impl Component for Shell {
                 // longer matches the box is stale too (the text was
                 // edited or cleared while the timer waited).
                 if seq == self.search_debounce_seq && query == self.search_text.trim() {
-                    context.spawn_background(move |_| {
-                        let result = data::runtime_handle()
-                            .block_on(async { data::client().search_all(&query).await });
-                        Message::SearchAllLoaded(query, result.map_err(|err| err.to_string()))
-                    });
+                    self.fetch_search(context, query);
                 }
             }
             Message::SuggestionChosen(text) => {
@@ -979,12 +1021,22 @@ impl Component for Shell {
                 self.home_loading = false;
                 match result {
                     Ok(data) => {
-                        // Cache the section art, so the next visit
-                        // loads it from disk.
+                        // Cache the page data (offline-first) and
+                        // the section art, so the next open works
+                        // with no connection.
+                        self.cache.put(cache::home_key(), &data);
                         spawn_cache_images(context, home_image_urls(&data));
                         self.home = Some(data);
+                        self.home_error = None;
                     }
-                    Err(err) => self.home_error = Some(err),
+                    Err(err) => {
+                        // A cached Home already on screen stays —
+                        // the error only shows when there is
+                        // nothing to show.
+                        if self.home.is_none() {
+                            self.home_error = Some(err);
+                        }
+                    }
                 }
             }
             Message::SearchAllLoaded(query, result) => {
@@ -992,16 +1044,35 @@ impl Component for Shell {
                     self.search_loading = false;
                     match result {
                         Ok(all) => {
-                            self.search_suggestions = all
-                                .top_query
-                                .results
-                                .iter()
-                                .map(|hit| hit.title.clone())
-                                .take(8)
-                                .collect();
-                            self.search_all = Some(all);
+                            self.cache.put(&cache::search_key(&query), &all);
+                            self.apply_search(all);
                         }
-                        Err(err) => self.search_error = Some(err),
+                        Err(_err) => {
+                            // A result already on screen (from
+                            // the cache) stays. With nothing on
+                            // screen, search the local catalog —
+                            // downloads and library — which works
+                            // offline. Only when that finds
+                            // nothing does the user see a message,
+                            // in plain words.
+                            if self.search_all.is_none() {
+                                let local = self.catalog.search_local(&query);
+                                let any = !local.songs.results.is_empty()
+                                    || !local.albums.results.is_empty()
+                                    || !local.artists.results.is_empty()
+                                    || !local.playlists.results.is_empty();
+                                if any {
+                                    self.apply_search(local);
+                                } else {
+                                    self.search_error = Some(
+                                        "Couldn't find anything. If you're offline, only your \
+                                         downloaded music can be searched — connect to search \
+                                         everything."
+                                            .to_string(),
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1269,7 +1340,41 @@ impl Component for Shell {
                 }
             }
             Message::PlayByKind(kind, id) => {
-                spawn_play_by_kind(context, kind, id);
+                // Offline-first: a downloaded song, or a fully
+                // downloaded collection, plays straight from the
+                // catalog — no network fetch at all. Anything
+                // else fetches, and a failed fetch falls back to
+                // whatever part is downloaded (PlayFetchFailed).
+                let local = if kind == "song" || self.catalog.collection_complete(&id) {
+                    self.catalog.playable_songs(&kind, &id)
+                } else {
+                    Vec::new()
+                };
+                if local.is_empty() {
+                    spawn_play_by_kind(context, kind, id);
+                } else {
+                    self.update(Message::PlaySong(local, 0), context);
+                }
+            }
+            Message::PlayFetchFailed(kind, id) => {
+                // The fetch failed (offline, most likely): play
+                // the downloaded part when there is any, and say
+                // plainly why nothing can play when there is not.
+                let local = self.catalog.playable_songs(&kind, &id);
+                if local.is_empty() {
+                    self.notice = Some(offline_play_notice(&kind));
+                } else {
+                    self.update(Message::PlaySong(local, 0), context);
+                }
+            }
+            Message::PlayNextFetchFailed(kind, id) => {
+                let local = self.catalog.playable_songs(&kind, &id);
+                if !local.is_empty() {
+                    self.update(Message::PlayNext(local), context);
+                }
+            }
+            Message::CloseNotice => {
+                self.notice = None;
             }
             Message::OpenDetails(target) => {
                 self.open_details(context, target);
@@ -1301,10 +1406,24 @@ impl Component for Shell {
                     details.loading = false;
                     match result {
                         Ok(content) => {
+                            // Cache the page (offline-first), so
+                            // the next open is instant, online or
+                            // not.
+                            let key = cache::details_key(&details.target.kind, &details.target.id);
+                            self.cache.put(&key, &content);
                             spawn_cache_images(context, details_image_urls(&content));
                             details.content = Some(content);
+                            details.error = None;
                         }
-                        Err(err) => details.error = Some(err),
+                        Err(err) => {
+                            // A page already on screen (from the
+                            // cache or the downloads) stays — the
+                            // error only shows when there is
+                            // nothing to show.
+                            if details.content.is_none() {
+                                details.error = Some(err);
+                            }
+                        }
                     }
                 }
             }
@@ -1321,7 +1440,10 @@ impl Component for Shell {
                     // A song card just plays the song; every other
                     // kind opens its own details page.
                     if target.kind == "song" {
-                        spawn_play_by_kind(context, target.kind, target.id);
+                        self.update(
+                            Message::PlayByKind(target.kind.clone(), target.id.clone()),
+                            context,
+                        );
                     } else {
                         self.open_details(context, target);
                     }
@@ -1336,7 +1458,7 @@ impl Component for Shell {
             }
             Message::MenuPlay(target) => {
                 self.menu = None;
-                spawn_play_by_kind(context, target.kind, target.id);
+                self.update(Message::PlayByKind(target.kind, target.id), context);
             }
             Message::MenuPlayNext(target) => {
                 self.menu = None;
@@ -1369,7 +1491,14 @@ impl Component for Shell {
                 }
             }
             Message::PlayPinnedSong(id) => {
-                spawn_play_pinned_song(context, id);
+                // A downloaded pinned song plays from the catalog
+                // (its local file) — no fetch, so it works
+                // offline. Anything else is fetched by id.
+                if let Some(song) = self.catalog.downloaded_song(&id) {
+                    self.update(Message::PlaySong(vec![song], 0), context);
+                } else {
+                    spawn_play_pinned_song(context, id);
+                }
             }
             Message::DownloadTarget(target) => {
                 // Close the context menu (when this came from one).
@@ -1768,7 +1897,29 @@ impl Shell {
                 self.properties_view(properties, context),
             ));
         }
+        if let Some(notice) = &self.notice {
+            layers.push(KeyedView::new("notice", self.notice_view(notice, context)));
+        }
         Grid::new().keyed_children(layers)
+    }
+
+    /// A plain-language notice dialog — the only error text a
+    /// user ever sees is written for them (e.g. a play request
+    /// that cannot work offline). A native ContentDialog, like
+    /// Properties: it dismisses itself (OK, Escape, light
+    /// dismiss).
+    fn notice_view(&self, notice: &str, context: &mut ViewContext<Self>) -> View {
+        ContentDialog::new()
+            .title("Can't play right now")
+            .close_button_text("OK")
+            .is_open(true)
+            .on_closed(context.callback(|_result: ContentDialogResult| Message::CloseNotice))
+            .content(
+                StackPanel::new().children((TextBlock::new()
+                    .text(notice.to_string())
+                    .font_size(14.0)
+                    .text_wrapping(TextWrapping::Wrap),)),
+            )
     }
 
     /// The context menu: Play, Play next, Download (or Delete
@@ -1879,11 +2030,11 @@ impl Shell {
                 "loading",
                 ProgressRing::new().is_active(true),
             ));
-        } else if let Some(err) = &properties.error {
+        } else if properties.error.is_some() {
             rows.push(KeyedView::new(
                 "error",
                 TextBlock::new()
-                    .text(format!("Couldn't load details: {err}"))
+                    .text("Couldn't load details. Check your connection and try again.")
                     .font_size(14.0)
                     .opacity(0.7)
                     .text_wrapping(TextWrapping::Wrap),
@@ -1978,6 +2129,25 @@ impl Shell {
                 error: None,
                 content: Some(content),
             });
+            return;
+        }
+        // The page cache: a previously fetched page opens
+        // instantly. A stale copy opens too and refreshes in the
+        // background; a fresh one skips the fetch entirely.
+        if let Some((content, fresh)) = self.cache.get::<DetailsContent>(
+            &cache::details_key(&target.kind, &target.id),
+            cache::DETAILS_TTL_MS,
+        ) {
+            self.details.push(DetailsState {
+                seq,
+                target: target.clone(),
+                loading: false,
+                error: None,
+                content: Some(content),
+            });
+            if !fresh {
+                spawn_details_load(context, seq, target);
+            }
             return;
         }
         self.details.push(DetailsState {
@@ -2117,11 +2287,44 @@ impl Shell {
         self.details.clear();
         self.search_loading = true;
         self.search_error = None;
+        self.fetch_search(context, query);
+    }
+
+    /// Run a search for `query`, cache-first: a cached result
+    /// shows instantly, a fresh one ends there, a stale one is
+    /// refreshed by a background fetch, and a failed fetch keeps
+    /// whatever is on screen (SearchAllLoaded runs the offline
+    /// catalog search when there is nothing).
+    fn fetch_search(&mut self, context: &ComponentContext<Self>, query: String) {
+        if let Some((all, fresh)) = self
+            .cache
+            .get::<SearchAll>(&cache::search_key(&query), cache::SEARCH_TTL_MS)
+        {
+            self.search_loading = false;
+            self.apply_search(all);
+            if fresh {
+                return;
+            }
+        }
         context.spawn_background(move |_| {
             let result =
                 data::runtime_handle().block_on(async { data::client().search_all(&query).await });
             Message::SearchAllLoaded(query, result.map_err(|err| err.to_string()))
         });
+    }
+
+    /// Put a search result on screen: the result sections plus
+    /// the autocomplete suggestions taken from the top query.
+    fn apply_search(&mut self, all: SearchAll) {
+        self.search_suggestions = all
+            .top_query
+            .results
+            .iter()
+            .map(|hit| hit.title.clone())
+            .take(8)
+            .collect();
+        self.search_all = Some(all);
+        self.search_error = None;
     }
 
     /// Listen for one OS media-session button press: block on the

@@ -13,6 +13,7 @@
 //! see README.md).
 
 mod app;
+mod cache;
 mod catalog;
 mod data;
 mod image_cache;

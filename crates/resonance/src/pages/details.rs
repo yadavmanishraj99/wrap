@@ -145,14 +145,14 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
                 .keyed_children(sections),
         );
     }
-    if let Some(err) = &details.error {
+    if details.error.is_some() {
         return StackPanel::new().margin(24.0).spacing(12.0).children((
             TextBlock::new()
                 .text(details.target.title.clone())
                 .font_size(28.0)
                 .font_weight(FontWeight::BOLD),
             TextBlock::new()
-                .text(format!("Couldn't load details: {err}"))
+                .text("Couldn't load this page. Check your connection and try again.")
                 .font_size(14.0)
                 .opacity(0.7),
             Button::new()

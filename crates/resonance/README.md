@@ -236,9 +236,16 @@ cargo check -p resonance --target x86_64-pc-windows-msvc
 | Details | Live — one page per kind, each with its own layout: Artist (circular art, followers, Play, Top songs, Top albums, Similar artists), Album (art, clickable artist names, year • songs, Play, Like), Playlist / Chart (art, description, Play, Like), Song (art, clickable artists, Play, Like, lyrics when available); title-bar back button returns. Song cards never open this page — they just play. Details are an inner-route stack: opening a details page from inside another details page pushes a new entry, and Back walks back through each one in reverse order (Home → album → album → artist → back → back → back → Home), instead of dropping straight to the page. Tapping the current section's nav item (e.g. Home while deep in Home's details) returns straight to that section's first page, popping every detail layer at once — the nav label carries a press handler for this, since the nav only reports selection *changes* and tapping an already-selected item would otherwise do nothing |
 | Queue | Live — the queue panel over the Now Playing sidebar (from its Show full queue button); playing a row starts the queue there; song titles wrap |
 | Now Playing | Live — an opaque 340px sidebar on the right (a solid fill, so the page never bleeds through it). It only opens and closes from the player bar's Now playing button — a track starting never opens it on its own (covers the right of the page, never the title bar or player bar). Top to bottom: the current song's details (big art, title, clickable artist names, album (clickable), Like), then the main artist's brief (circular picture, name + followers, fetched on track change; tap opens the artist page), then a Next-in-queue card (clicking it plays that song) and a Show full queue button (opens a queue panel over the whole sidebar — Queue + close button, the queue's song rows — which appears at once; hiding the sidebar closes it too). Hidden with the close button or the player bar's Now playing toggle; it stays hidden until the toggle is pressed again |
-| Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists |
+| Search | Debounced ~300ms — typing searches the typed text (results + autocomplete from one call); results are Home-style media-card sections: Top result, Songs, Albums, Artists, Playlists. Results are cached per search (see Offline-first); with no connection and no cached result, search falls back to the local catalog — downloads and library — so downloaded music is still findable offline |
 | Library | Live — liked songs, recently played, liked albums/playlists/artists (persisted locally), all as Home-style media-card sections; albums, playlists and artists land here via the Like button on their pages. **Downloads** (auto-playlist of individually downloaded songs) and **Downloaded artists** (one playlist per downloaded artist, holding their top songs) also live here |
 | Settings | Live — theme, window material (Acrylic default), stream quality, autoplay, downloads (auto-download switches, download quality, image cache size, recently-played cap), about |
+
+## Offline-first
+
+Pages open from local data first and refresh in the background:
+
+- **Page cache:** Home, every details page, and search results are cached as JSON files in `%LOCALAPPDATA%\Resonance\cache\` (one file per entry, stamped with its fetch time). Opening a page shows the cache instantly — no skeleton. A fresh entry (Home / search: 30 minutes, details: 24 hours) is served with no network call at all; a stale entry is shown and refreshed in the background, and the refresh replaces it only when it succeeds. **Nothing is evicted while offline** — there is no eviction; an entry lives until a fresh copy replaces it, so whatever was cached is what the user can browse with no connection.
+- **Playback is local-first too:** a downloaded song (pinned, in the Library, or on any card) plays straight from the catalog and its local file — no fetch. A downloaded collection plays its downloaded songs. Only an item the app has never stored is fetched, and if that fetch fails the downloaded part plays instead; when nothing playable is stored, a dialog says so in plain words ("This song isn't downloaded, and you're offline…"). No error anywhere in the app shows technical text — page errors are plain sentences with a Retry / Back action.
 
 ## Downloads
 
@@ -263,6 +270,9 @@ crates/resonance/src/
   app.rs      Shell component: state, messages, TitleBar +
               NavigationView + player bar, player polling
   data.rs     shared tokio runtime + saavnapi client
+  cache.rs    file-based page cache (Home / details / search),
+              offline-first: instant opens, background refresh,
+              nothing evicted while offline
   catalog.rs the SQLite catalog (media / collections /
               collection_media / library_refs) + the download
               engine: resume (.part + Range) + retry, dedup by
