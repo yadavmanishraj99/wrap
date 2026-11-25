@@ -476,7 +476,25 @@ fn bar_icon_button(
         .tooltip(tooltip)
 }
 
-fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
+/// A top-level nav item (Home/Search/Library). The label is a
+/// transparent Border with a pointer handler, not a plain string, so
+/// tapping the item always navigates — even when it is already
+/// selected. A NavigationView only fires its selection callback when
+/// the selection CHANGES, so tapping the already-selected item used
+/// to do nothing, leaving the user stuck deep in a details stack
+/// with only the back button to climb out. The Border press sends
+/// Navigate, which returns to the section's first page and pops
+/// every detail layer of that journey. (The selection callback
+/// still fires too when the item was not selected; both send the
+/// same Navigate, which is idempotent.)
+fn nav_item(
+    tag: &str,
+    label: &str,
+    icon: Symbol,
+    selected: bool,
+    page: Page,
+    context: &mut ViewContext<Shell>,
+) -> KeyedView {
     KeyedView::new(
         tag.to_string(),
         NavigationViewItem::new()
@@ -484,7 +502,19 @@ fn nav_item(tag: &str, label: &str, icon: Symbol, selected: bool) -> KeyedView {
             .is_selected(selected)
             .selects_on_invoked(true)
             .slots([
-                SlotView::new(NavigationViewItemSlot::Content, label.to_string()),
+                SlotView::new(
+                    NavigationViewItemSlot::Content,
+                    Border::new()
+                        .background(Brush::Solid(Color::transparent()))
+                        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                            if info.is_left_button_pressed {
+                                Message::Navigate(page)
+                            } else {
+                                Message::Noop
+                            }
+                        }))
+                        .content(TextBlock::new().text(label).font_size(14.0)),
+                ),
                 SlotView::new(NavigationViewItemSlot::Icon, SymbolIcon::new().symbol(icon)),
             ]),
     )
@@ -1206,13 +1236,29 @@ impl Component for Shell {
         // it. A pinned row is a shortcut, not a page, so it never
         // changes the nav selection.
         let mut menu_items: Vec<KeyedView> = vec![
-            nav_item("home", "Home", Symbol::Home, self.page == Page::Home),
-            nav_item("search", "Search", Symbol::Find, self.page == Page::Search),
+            nav_item(
+                "home",
+                "Home",
+                Symbol::Home,
+                self.page == Page::Home,
+                Page::Home,
+                context,
+            ),
+            nav_item(
+                "search",
+                "Search",
+                Symbol::Find,
+                self.page == Page::Search,
+                Page::Search,
+                context,
+            ),
             nav_item(
                 "library",
                 "Library",
                 Symbol::Audio,
                 self.page == Page::Library,
+                Page::Library,
+                context,
             ),
         ];
         if !self.library.pinned.is_empty() {
