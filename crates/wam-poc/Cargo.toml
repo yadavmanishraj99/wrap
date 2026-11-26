@@ -1,0 +1,17 @@
+[package]
+name = "wam-poc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Proof of concept: creating and running a Windows Animation Manager animation from Rust via windows-rs."
+
+[[bin]]
+name = "wam-poc"
+path = "src/main.rs"
+
+[dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Animation",
+] }
