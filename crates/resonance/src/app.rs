@@ -670,7 +670,8 @@ fn nav_item(
 /// NavigationViewItem (Reactor 0.100 has no NavigationViewItemSeparator)
 /// with `selects_on_invoked(false)`, so clicking it never selects
 /// anything. The line runs end to end, left to right — no horizontal
-/// margin, only vertical spacing. Shown only while pinned items exist.
+/// margin, only vertical spacing. Shown only while the pane is
+/// open and pinned items exist.
 fn nav_divider() -> KeyedView {
     KeyedView::new(
         "pinned-divider".to_string(),
@@ -1736,9 +1737,13 @@ impl Component for Shell {
         };
 
         // The nav list: Home, Search, Library, then — only while
-        // pinned items exist — a divider and the pinned rows below
-        // it. A pinned row is a shortcut, not a page, so it never
-        // changes the nav selection.
+        // the pane is open and pinned items exist — a divider and
+        // the pinned rows below it. A pinned row is a shortcut,
+        // not a page, so it never changes the nav selection. When
+        // the pane is minimized the pinned rows (and their
+        // divider) are hidden: their 48px art and two-line labels
+        // don't fit the collapsed pane; they come back when the
+        // pane opens again.
         let mut menu_items: Vec<KeyedView> = vec![
             nav_item(
                 "home",
@@ -1766,7 +1771,7 @@ impl Component for Shell {
             ),
         ];
         let pinned_items = self.catalog.pinned_items();
-        if !pinned_items.is_empty() {
+        if self.pane_open && !pinned_items.is_empty() {
             menu_items.push(nav_divider());
             for pinned in &pinned_items {
                 let hovered = self.hovered_card.as_deref() == Some(pinned.id.as_str());
