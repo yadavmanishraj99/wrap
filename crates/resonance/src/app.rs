@@ -158,8 +158,9 @@ pub struct Shell {
     /// pages open from it instantly and refresh in the background.
     pub cache: cache::Cache,
     /// A plain-language message shown in a dialog (e.g. a play
-    /// request that cannot work offline). Never technical text.
-    pub notice: Option<String>,
+    /// request that cannot work offline): (title, body). Never
+    /// technical text.
+    pub notice: Option<(String, String)>,
     pub settings: Settings,
     pub player: Player,
     /// The SMTC button channel's receiving end, shared with the
@@ -337,6 +338,20 @@ fn offline_play_notice(kind: &str) -> String {
     format!(
         "{noun} isn't downloaded, and you're offline. Connect to the internet to play it, or download it first for offline listening."
     )
+}
+
+/// Kinds Home can show but the app cannot open or play yet —
+/// radio stations (Saavn's station-songs call is down on their
+/// side), channels, and shows. Tapping one explains that in
+/// plain language instead of opening a page that can't load or
+/// fetching songs that can never play.
+fn unavailable_notice(kind: &str) -> Option<&'static str> {
+    match kind {
+        "radio_station" => Some("Radio stations aren't available in Resonance yet."),
+        "channel" => Some("Channels aren't available in Resonance yet."),
+        "show" => Some("Podcasts aren't available in Resonance yet."),
+        _ => None,
+    }
 }
 
 /// Fetch a song/album/playlist/artist's songs in the background and
@@ -531,6 +546,11 @@ fn home_image_urls(data: &saavnapi::LaunchData) -> Vec<String> {
     push(&data.new_albums);
     push(&data.charts);
     push(&data.artist_recos);
+    push(&data.browse_discover);
+    push(&data.radio);
+    for items in data.promo_sections.values() {
+        push(items);
+    }
     urls
 }
 
@@ -1340,6 +1360,12 @@ impl Component for Shell {
                 }
             }
             Message::PlayByKind(kind, id) => {
+                // Kinds the app can't play yet (radio stations,
+                // channels, shows) explain themselves instead of
+                // fetching songs that can never play.
+                if self.notice_if_unavailable(&kind) {
+                    return;
+                }
                 // Offline-first: a downloaded song, or a fully
                 // downloaded collection, plays straight from the
                 // catalog — no network fetch at all. Anything
@@ -1362,7 +1388,10 @@ impl Component for Shell {
                 // plainly why nothing can play when there is not.
                 let local = self.catalog.playable_songs(&kind, &id);
                 if local.is_empty() {
-                    self.notice = Some(offline_play_notice(&kind));
+                    self.notice = Some((
+                        "Can't play right now".to_string(),
+                        offline_play_notice(&kind),
+                    ));
                 } else {
                     self.update(Message::PlaySong(local, 0), context);
                 }
@@ -1462,7 +1491,9 @@ impl Component for Shell {
             }
             Message::MenuPlayNext(target) => {
                 self.menu = None;
-                spawn_play_next_by_kind(context, target.kind, target.id);
+                if !self.notice_if_unavailable(&target.kind) {
+                    spawn_play_next_by_kind(context, target.kind, target.id);
+                }
             }
             Message::MenuProperties(target) => {
                 self.menu = None;
@@ -1503,6 +1534,9 @@ impl Component for Shell {
             Message::DownloadTarget(target) => {
                 // Close the context menu (when this came from one).
                 self.menu = None;
+                if self.notice_if_unavailable(&target.kind) {
+                    return;
+                }
                 if target.kind == "song" {
                     // Already in flight: nothing to do. Otherwise
                     // fetch the song; the prepare step touches it
@@ -1909,15 +1943,15 @@ impl Shell {
     /// that cannot work offline). A native ContentDialog, like
     /// Properties: it dismisses itself (OK, Escape, light
     /// dismiss).
-    fn notice_view(&self, notice: &str, context: &mut ViewContext<Self>) -> View {
+    fn notice_view(&self, notice: &(String, String), context: &mut ViewContext<Self>) -> View {
         ContentDialog::new()
-            .title("Can't play right now")
+            .title(notice.0.clone())
             .close_button_text("OK")
             .is_open(true)
             .on_closed(context.callback(|_result: ContentDialogResult| Message::CloseNotice))
             .content(
                 StackPanel::new().children((TextBlock::new()
-                    .text(notice.to_string())
+                    .text(notice.1.clone())
                     .font_size(14.0)
                     .text_wrapping(TextWrapping::Wrap),)),
             )
@@ -2096,7 +2130,22 @@ fn property_row(label: &str, value: &str) -> View {
 impl Shell {
     /// Open a details page for a card (shared by card clicks and
     /// the context menu's Play is separate — this is the drill-in).
+    /// If `kind` is one the app cannot open yet, show the
+    /// not-available notice and return true.
+    fn notice_if_unavailable(&mut self, kind: &str) -> bool {
+        match unavailable_notice(kind) {
+            Some(text) => {
+                self.notice = Some(("Not available yet".to_string(), text.to_string()));
+                true
+            }
+            None => false,
+        }
+    }
+
     fn open_details(&mut self, context: &ComponentContext<Self>, target: DetailsTarget) {
+        if self.notice_if_unavailable(&target.kind) {
+            return;
+        }
         // Details is an inner route of the current page, not a
         // top-level nav route: the page stays mounted (and stays
         // selected in the sidebar) and the details render inside
