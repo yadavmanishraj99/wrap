@@ -21,7 +21,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
     // A details drill-in is an inner route of this page: when one
     // is open it renders here, inside the page, instead of the
     // page's own content.
-    if shell.details.is_some() {
+    if !shell.details.is_empty() {
         return super::details::view(shell, context);
     }
     let search_box = AutoSuggestBox::new()
@@ -32,16 +32,21 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         .on_suggestion_chosen(context.callback(|value: String| Message::SuggestionChosen(value)));
 
     let content: View = if shell.search_loading {
-        StackPanel::new().spacing(12.0).children((
-            ProgressRing::new().is_active(true),
-            TextBlock::new()
-                .text("Searching...")
-                .font_size(14.0)
-                .opacity(0.7),
+        // Skeleton: this page's own layout — the five result
+        // sections (Top result, Songs, Albums, Artists, Playlists)
+        // with their headings and skeleton cards — Top result is
+        // one card, the rest a row each — so the placeholder reads
+        // as the search page, not a generic stack of bars.
+        StackPanel::new().spacing(32.0).children((
+            views::skeleton_section(shell, "Top result", 1),
+            views::skeleton_section(shell, "Songs", 5),
+            views::skeleton_section(shell, "Albums", 5),
+            views::skeleton_section(shell, "Artists", 5),
+            views::skeleton_section(shell, "Playlists", 5),
         ))
     } else if let Some(err) = &shell.search_error {
         TextBlock::new()
-            .text(format!("Search failed: {err}"))
+            .text(err.clone())
             .font_size(14.0)
             .opacity(0.7)
             .into()

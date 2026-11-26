@@ -37,7 +37,7 @@ pub fn view(
         .corner_radius(CornerRadius::uniform(4.0))
         .grid_column(0)
         .content(art_content);
-    let liked = shell.library.is_playlist_liked(&playlist.id);
+    let liked = shell.catalog.is_playlist_liked(&playlist.id);
     let playlist_for_like = playlist.clone();
 
     let header = Grid::new()
@@ -65,50 +65,27 @@ pub fn view(
                         .text(format!("{} songs", content.songs.len()))
                         .font_size(14.0)
                         .opacity(0.7),
-                    StackPanel::new()
-                        .orientation(Orientation::Horizontal)
-                        .spacing(8.0)
-                        .children((
-                            Button::new()
-                                .is_enabled(!content.songs.is_empty())
-                                .on_click(
-                                    context.message(Message::PlaySong(content.songs.clone(), 0)),
-                                )
-                                .content(
-                                    StackPanel::new()
-                                        .orientation(Orientation::Horizontal)
-                                        .spacing(8.0)
-                                        .children((
-                                            SymbolIcon::new().symbol(Symbol::Play),
-                                            TextBlock::new().text("Play"),
-                                        )),
-                                ),
-                            Button::new()
-                                .on_click(
-                                    context.message(Message::ToggleLikePlaylist(playlist_for_like)),
-                                )
-                                .content(
-                                    StackPanel::new()
-                                        .orientation(Orientation::Horizontal)
-                                        .spacing(8.0)
-                                        .children((
-                                            SymbolIcon::new().symbol(if liked {
-                                                Symbol::Favorite
-                                            } else {
-                                                Symbol::Add
-                                            }),
-                                            TextBlock::new().text(if liked {
-                                                "Liked"
-                                            } else {
-                                                "Like"
-                                            }),
-                                        )),
-                                ),
+                    views::details_action_row(
+                        &content.songs,
+                        Some((
+                            liked,
+                            Message::ToggleLikePlaylist(playlist_for_like),
+                            playlist.id.clone(),
                         )),
+                        target,
+                        shell,
+                        context,
+                    ),
                 )),
         ));
 
     let mut sections: Vec<KeyedView> = vec![KeyedView::new("header", header)];
+    // While this playlist is downloading, show its overall
+    // progress above the song list (each song row shows its own
+    // progress on its art at the same time).
+    if let Some(progress) = views::collection_download_progress(&target.id, shell) {
+        sections.push(KeyedView::new("download", progress));
+    }
     if !content.songs.is_empty() {
         let rows: Vec<KeyedView> = content
             .songs
@@ -116,7 +93,7 @@ pub fn view(
             .map(|song| {
                 KeyedView::new(
                     song.id.clone(),
-                    views::song_row(song, &content.songs, shell, context),
+                    views::song_row(song, &content.songs, false, shell, context),
                 )
             })
             .collect();

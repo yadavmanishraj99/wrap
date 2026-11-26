@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/saavnapi", "crates/resonance"]
+members = ["crates/saavnapi", "crates/resonance", "crates/wam-poc"]
 
 # Centralize common metadata across all crates
 [workspace.package]

@@ -10,6 +10,7 @@ use saavnapi::{ArtistGroups, ArtistMap, DownloadLink, Song};
 use windows_reactor::*;
 
 use crate::app::{DetailsTarget, Message, Shell};
+use crate::store::Theme;
 
 /// Seconds as `m:ss`.
 pub fn fmt_time(secs: f64) -> String {
@@ -32,8 +33,18 @@ pub fn art_url(links: &[DownloadLink], quality: &str) -> Option<String> {
 
 /// Build an `Image` from a URL; an invalid URL yields a blank image
 /// instead of an error (`Image::source` validates the URI).
+/// An `Image` for a URL. When the image is already in the disk
+/// cache, the cached file is used (so Home and details pages do
+/// not re-download the same art on every visit); otherwise the
+/// remote URL is used and the image is cached in the background
+/// the next time the page's data loads.
 pub fn image_from_url(url: &str) -> Image {
-    Image::new().source(url).unwrap_or_else(|_| Image::new())
+    let cache = crate::image_cache::cache_dir(&crate::store::app_dir());
+    let source = match crate::image_cache::lookup(&cache, url) {
+        Some(path) => crate::catalog::file_uri(&path),
+        None => url.to_string(),
+    };
+    Image::new().source(source).unwrap_or_else(|_| Image::new())
 }
 
 /// Comma-joined primary artist names, or "Unknown artist".
@@ -56,6 +67,74 @@ pub fn section_header(title: &str) -> View {
         .font_size(20.0)
         .font_weight(FontWeight::SEMI_BOLD)
         .into()
+}
+
+/// A circular download progress overlay, centered on an art tile:
+/// a determinate ring (the fraction downloaded) with a download
+/// arrow in the middle. When the total size is unknown the ring
+/// spins indeterminately instead.
+pub fn download_progress_overlay(size: f64, fraction: Option<f64>) -> View {
+    let ring = match fraction {
+        Some(fraction) => ProgressRing::new()
+            .width(size)
+            .height(size)
+            .minimum(0.0)
+            .maximum(1.0)
+            .value(fraction)
+            .is_indeterminate(false)
+            .is_active(true),
+        None => ProgressRing::new()
+            .width(size)
+            .height(size)
+            .is_indeterminate(true)
+            .is_active(true),
+    };
+    Grid::new().width(size).height(size).children((
+        ring,
+        SymbolIcon::new()
+            .symbol(Symbol::Download)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center),
+    ))
+}
+
+/// A small filled circle with a check — the "downloaded" mark
+/// shown at the start of a subtitle.
+pub fn downloaded_badge(size: f64) -> View {
+    Border::new()
+        .width(size)
+        .height(size)
+        .corner_radius(CornerRadius::uniform(size / 2.0))
+        .background(Brush::Theme(ThemeBrush::Accent))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::Accept)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+}
+
+/// A collection's download progress: a bar plus "X of Y songs".
+/// Shown on an album / playlist page while that collection is
+/// downloading. Returns `None` when the collection is not
+/// downloading.
+pub fn collection_download_progress(collection_id: &str, shell: &Shell) -> Option<View> {
+    let (completed, total) = shell.catalog.collection_progress(collection_id)?;
+    if !shell.catalog.is_collection_downloading(collection_id) {
+        return None;
+    }
+    let fraction = shell.catalog.collection_fraction(collection_id)?;
+    let label = format!("Downloading {completed} of {total} songs");
+    Some(
+        StackPanel::new().spacing(4.0).children((
+            TextBlock::new().text(label).font_size(12.0).opacity(0.7),
+            ProgressBar::new()
+                .minimum(0.0)
+                .maximum(1.0)
+                .value(fraction)
+                .is_indeterminate(false),
+        )),
+    )
 }
 
 /// One section of media cards, Home-style: heading + up to 20 cards
@@ -82,6 +161,7 @@ pub fn card_section(
                         (*target).clone(),
                         target.art.clone(),
                         shell.hovered_card.as_deref() == Some(target.id.as_str()),
+                        shell,
                         context,
                     ),
                 )
@@ -216,6 +296,7 @@ pub fn media_card(
     target: DetailsTarget,
     art: Option<String>,
     hovered: bool,
+    shell: &Shell,
     context: &mut ViewContext<Shell>,
 ) -> View {
     let size = 168.0;
@@ -228,6 +309,9 @@ pub fn media_card(
             .height(size)
             .stretch(Stretch::UniformToFill)
             .into(),
+        // No art: a music-note icon. The tile behind it is a solid
+        // placeholder fill (not transparent), so the card reads as
+        // a tile instead of an empty hole.
         None => SymbolIcon::new()
             .symbol(Symbol::Audio)
             .horizontal_alignment(HorizontalAlignment::Center)
@@ -239,19 +323,50 @@ pub fn media_card(
         Border::new()
             .width(size)
             .height(size)
-            .corner_radius(CornerRadius::uniform(4.0))
+            // Artist art is a full circle; every other kind is a
+            // 4px rounded square.
+            .corner_radius(CornerRadius::uniform(if target.kind == "artist" {
+                size / 2.0
+            } else {
+                4.0
+            }))
+            .background(skeleton_fill(shell.settings.theme))
             .on_pointer_pressed(card_press(target.clone(), context))
             .content(art_view),
     )];
-    if hovered {
+    // A downloading song shows a circular progress ring with a
+    // download arrow in the middle, centered on the art.
+    if target.kind == "song" && shell.catalog.is_downloading(&target.id) {
+        let fraction = shell.catalog.item_fraction(&target.id);
+        art_children.push(KeyedView::new(
+            "download",
+            download_progress_overlay(size, fraction),
+        ));
+    }
+    // Keep the hover buttons mounted while the context menu is open
+    // for this card: opening the menu moves the pointer onto the
+    // menu, which would otherwise fire PointerExited and yank the
+    // pressed More button out of the tree mid-press.
+    let menu_open = shell
+        .menu
+        .as_ref()
+        .is_some_and(|m| m.target.kind == target.kind && m.target.id == target.id);
+    if hovered || menu_open {
         let play_target = target.clone();
         art_children.push(KeyedView::new(
             "play",
             hover_button(
                 Symbol::Play,
                 HorizontalAlignment::Left,
-                move |_info: PointerEventInfo| {
-                    Message::PlayByKind(play_target.kind.clone(), play_target.id.clone())
+                move |info: PointerEventInfo| {
+                    // Left-click only: a right-click must not start
+                    // playback — it falls through to the card art's
+                    // press handler, which opens the context menu.
+                    if info.is_left_button_pressed {
+                        Message::PlayByKind(play_target.kind.clone(), play_target.id.clone())
+                    } else {
+                        Message::Noop
+                    }
                 },
                 context,
             ),
@@ -270,9 +385,44 @@ pub fn media_card(
         ));
     }
     let hover_id = target.id.clone();
+    // The subtitle (artist / description line). A downloaded song
+    // gets a filled circle check at the start of the subtitle.
+    let subtitle: View = if target.kind == "song" && shell.catalog.is_downloaded(&target.id) {
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(4.0)
+            .margin(4.0)
+            .children((
+                downloaded_badge(14.0),
+                TextBlock::new()
+                    .text(target.subtitle.clone())
+                    .font_size(12.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::Wrap)
+                    .max_lines(2),
+            ))
+    } else {
+        TextBlock::new()
+            .text(target.subtitle.clone())
+            .font_size(12.0)
+            .opacity(0.7)
+            .text_wrapping(TextWrapping::Wrap)
+            .max_lines(2)
+            .margin(4.0)
+            .into()
+    };
     Border::new()
         .width(size)
-        .background(Brush::Solid(Color::transparent()))
+        // A navigation-like hover background: a card fill while the
+        // card is hovered (or its menu is open), transparent
+        // otherwise. The card already shows Play/More buttons on
+        // hover; the background makes the hover state unmistakable.
+        .background(if hovered || menu_open {
+            Brush::Theme(ThemeBrush::CardBackground)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .corner_radius(CornerRadius::uniform(8.0))
         .on_pointer_entered(
             context.callback(move |_info: PointerEventInfo| {
                 Message::CardHover(Some(hover_id.clone()))
@@ -299,13 +449,7 @@ pub fn media_card(
                                     .text_wrapping(TextWrapping::Wrap)
                                     .max_lines(2)
                                     .margin(4.0),
-                                TextBlock::new()
-                                    .text(target.subtitle.clone())
-                                    .font_size(12.0)
-                                    .opacity(0.7)
-                                    .text_wrapping(TextWrapping::Wrap)
-                                    .max_lines(2)
-                                    .margin(4.0),
+                                subtitle,
                             )),
                         ),
                 )),
@@ -336,33 +480,444 @@ fn hover_button(
         .content(SymbolIcon::new().symbol(icon))
 }
 
-/// One song row: artwork, title/artist, duration, play + like buttons.
-/// `queue` is the full list the row belongs to, so Play starts the
-/// queue at this song's position.
+/// A small circular like button. When not liked, it is Add (plus)
+/// inside a 32px circle outline (a 2px border, transparent
+/// background); the icon inside is ~16px, so there is padding
+/// between the icon and the circle. When already liked, it is a
+/// check inside a filled circle, the fill being the framework's
+/// primary color (Accent — the same primary the play button uses;
+/// #1ed760 Spotify green is the fallback if the framework ever
+/// stopped providing one). The circle stroke is the same color and
+/// the same weight as the icon's strokes (the theme's primary text
+/// color, 2px), so the button and its circle read as one unit. The
+/// not-liked button is greyish when the pointer is not over it (low
+/// opacity) and goes to full contrast on hover; the liked button is
+/// always full contrast, so the liked state is unmistakable. The
+/// colors use the theme's foreground and stroke, dimmed by opacity,
+/// so they read in both dark mode (white dimmed over the dark page)
+/// and light mode (black dimmed over the light page) — no hardcoded
+/// grey that would vanish on one theme.
+/// `None` renders an inert greyed-out Add (no song to like yet).
+pub fn like_button(
+    song: Option<&Song>,
+    grid_column: i32,
+    shell: &Shell,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    let (liked, id) = match song {
+        Some(song) => (shell.catalog.is_liked(&song.id), Some(song.id.clone())),
+        None => (false, None),
+    };
+    let hovered = id
+        .as_deref()
+        .is_some_and(|id| shell.hovered_like.as_deref() == Some(id));
+    // Liked: a check inside a filled circle, the fill being the
+    // framework's primary color (Accent). Not liked: a plus inside a
+    // circle outline (1px border, transparent background). The liked
+    // button is always full contrast; the not-liked one is greyish
+    // until hovered.
+    let mut border = Border::new()
+        .width(32.0)
+        .height(32.0)
+        .corner_radius(CornerRadius::uniform(16.0))
+        .background(if liked {
+            Brush::Theme(ThemeBrush::Accent)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .opacity(if liked || hovered { 1.0 } else { 0.55 })
+        .margin(4.0)
+        .grid_column(grid_column);
+    if !liked {
+        border = border
+            // A 2px stroke, the same weight as the icon's strokes,
+            // and the same color as the icon (primary text).
+            .border_thickness(2.0)
+            .border_brush(Brush::Theme(ThemeBrush::PrimaryText));
+    }
+    if let Some(song) = song {
+        let hover_id = song.id.clone();
+        let press_song = song.clone();
+        border = border
+            .on_pointer_entered(context.callback(move |_info: PointerEventInfo| {
+                Message::LikeHover(Some(hover_id.clone()))
+            }))
+            .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::LikeHover(None)))
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if info.is_left_button_pressed {
+                    Message::ToggleLike(press_song.clone())
+                } else {
+                    Message::Noop
+                }
+            }));
+    }
+    border
+        .content(
+            SymbolIcon::new()
+                .symbol(if liked { Symbol::Accept } else { Symbol::Add })
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip(if liked {
+            "Remove from liked songs"
+        } else {
+            "Add to liked songs"
+        })
+}
+
+/// A native WinUI context menu (MenuFlyout) for an item: Play, Play
+/// next, Properties, and Pin/Unpin. Attach it to a real Button (the
+/// More button) — a click opens the real MenuFlyout. The callback
+/// maps the chosen item's label back to the matching message; the
+/// native menu reports the label string, not the key. Pin reads
+/// "Unpin" when the item is already pinned.
+pub fn context_menu(
+    target: &DetailsTarget,
+    is_pinned: bool,
+    has_download: bool,
+    context: &mut ViewContext<Shell>,
+) -> Menu {
+    let play_target = target.clone();
+    let next_target = target.clone();
+    let download_target = target.clone();
+    let delete_target = target.clone();
+    let props_target = target.clone();
+    let pin_target = target.clone();
+    let mut items = vec![
+        MenuItem::item("play", "Play"),
+        MenuItem::item("playnext", "Play next"),
+        MenuItem::item("download", "Download"),
+    ];
+    if has_download {
+        items.push(MenuItem::item("delete", "Delete download"));
+    }
+    items.push(MenuItem::item("properties", "Properties"));
+    items.push(MenuItem::item(
+        "pin",
+        if is_pinned { "Unpin" } else { "Pin" },
+    ));
+    Menu::new(
+        items,
+        context.callback(move |label: String| match label.as_str() {
+            "Play" => Message::MenuPlay(play_target.clone()),
+            "Play next" => Message::MenuPlayNext(next_target.clone()),
+            "Download" => Message::DownloadTarget(download_target.clone()),
+            "Delete download" => Message::DeleteDownload(delete_target.clone()),
+            "Properties" => Message::MenuProperties(props_target.clone()),
+            "Pin" | "Unpin" => Message::TogglePin(pin_target.clone()),
+            _ => Message::Noop,
+        }),
+    )
+}
+
+/// The action row under a details header, left to right: a large
+/// 64x64 circular Play button (filled primary, Play icon centered),
+/// a shuffle icon button (icon only, no container), a circular like
+/// button (a plus in a 32px circle outline, or a check in a filled
+/// primary circle when already liked), a download button (a
+/// download icon in a 32px circle — a check in a filled primary
+/// circle once downloaded, dimmed while downloading), and a
+/// horizontal more icon button (icon only, no container) that opens
+/// the item's context menu. The icons in the circular buttons are
+/// centered, with padding between the icon and the circle, and the
+/// icon and the circle stroke are the same color and the same
+/// weight (the theme's primary text color, 2px). `like` is
+/// `Some((liked, toggle, hover_id))` for items that can be liked
+/// (album, playlist, song, artist) and `None` when the item has no
+/// like.
+pub fn details_action_row(
+    songs: &[Song],
+    like: Option<(bool, Message, String)>,
+    target: &DetailsTarget,
+    shell: &Shell,
+    context: &mut ViewContext<Shell>,
+) -> View {
+    let play_songs = songs.to_vec();
+    let shuffle_songs = songs.to_vec();
+    let has_songs = !songs.is_empty();
+    // The large circular Play button: 64x64, filled primary, Play
+    // icon centered. Dimmed when there is nothing to play.
+    let play_button = Border::new()
+        .width(64.0)
+        .height(64.0)
+        .corner_radius(CornerRadius::uniform(32.0))
+        .background(Brush::Theme(ThemeBrush::Accent))
+        .opacity(if has_songs { 1.0 } else { 0.4 })
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if has_songs && info.is_left_button_pressed {
+                Message::PlaySong(play_songs.clone(), 0)
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::Play)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip("Play");
+    // Shuffle: icon only, no container — a transparent border with
+    // the icon centered, greyish.
+    let shuffle_button = Border::new()
+        .width(32.0)
+        .height(32.0)
+        .background(Brush::Solid(Color::transparent()))
+        .opacity(0.7)
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                Message::ShufflePlay(shuffle_songs.clone())
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::Shuffle)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip("Shuffle");
+    // Download: icon only, in a circle — a 32px outline circle
+    // with the icon centered, so there is padding between the icon
+    // and the circle, the icon and the circle stroke the same color
+    // and the same weight. A placeholder for now; the download
+    // feature is still under discussion, so it does nothing yet.
+    // The Download button: starts downloading this song (or the
+    // whole album / playlist / chart). Once downloaded it becomes
+    // a filled circle with a check; while downloading it is dimmed
+    // and inert (progress shows on the art).
+    let downloaded = if target.kind == "song" {
+        shell.catalog.is_downloaded(&target.id)
+    } else {
+        shell.catalog.collection_complete(&target.id)
+    };
+    let downloading = if target.kind == "song" {
+        shell.catalog.is_downloading(&target.id)
+    } else {
+        shell.catalog.is_collection_downloading(&target.id)
+    };
+    let target_for_download = target.clone();
+    let download_button = if downloaded {
+        Border::new()
+            .width(32.0)
+            .height(32.0)
+            .corner_radius(CornerRadius::uniform(16.0))
+            .background(Brush::Theme(ThemeBrush::Accent))
+            .vertical_alignment(VerticalAlignment::Center)
+            .on_pointer_pressed(context.callback(|_info: PointerEventInfo| Message::Noop))
+            .content(
+                SymbolIcon::new()
+                    .symbol(Symbol::Accept)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            )
+            .tooltip("Downloaded")
+    } else {
+        Border::new()
+            .width(32.0)
+            .height(32.0)
+            .corner_radius(CornerRadius::uniform(16.0))
+            .background(Brush::Solid(Color::transparent()))
+            .border_thickness(2.0)
+            .border_brush(Brush::Theme(ThemeBrush::PrimaryText))
+            .opacity(if downloading { 0.4 } else { 0.7 })
+            .vertical_alignment(VerticalAlignment::Center)
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if downloading || !info.is_left_button_pressed {
+                    Message::Noop
+                } else {
+                    Message::DownloadTarget(target_for_download.clone())
+                }
+            }))
+            .content(
+                SymbolIcon::new()
+                    .symbol(Symbol::Download)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            )
+            .tooltip("Download")
+    };
+    // The More button: a real WinUI Button carrying a native
+    // context menu (MenuFlyout). A click opens the real menu; the
+    // menu reports the chosen item's label, which the helper maps
+    // back to the matching action. Plain default Button, no Subtle
+    // style and no tooltip — the Subtle + tooltip + Menu
+    // combination crashed the app at launch (0xc000027b) on the
+    // volume button, so the same pattern is avoided here until the
+    // cause is isolated. This replaces the hand-built overlay menu
+    // for this button — the overlay stays only for right-click,
+    // which the native menu cannot do.
+    let is_pinned = shell.catalog.is_pinned(&target.kind, &target.id);
+    let has_download = if target.kind == "song" {
+        shell.catalog.is_downloaded(&target.id)
+    } else {
+        shell
+            .catalog
+            .collection_progress(&target.id)
+            .is_some_and(|(completed, _)| completed > 0)
+    };
+    let more_button = Button::new()
+        .content(
+            SymbolIcon::new()
+                .symbol(Symbol::More)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .menu(context_menu(target, is_pinned, has_download, context));
+
+    let mut items: Vec<KeyedView> = vec![
+        KeyedView::new("play", play_button),
+        KeyedView::new("shuffle", shuffle_button),
+    ];
+    if let Some((liked, toggle, hover_id)) = like {
+        // The circular like button: a plus in a circle outline, or a
+        // check in a filled primary circle when already liked. The
+        // icon is centered, and the icon and the circle stroke are
+        // the same color. Greyish until hovered; the liked button is
+        // always full contrast.
+        let like_hovered = shell.hovered_like.as_deref() == Some(hover_id.as_str());
+        let mut border = Border::new()
+            .width(32.0)
+            .height(32.0)
+            .corner_radius(CornerRadius::uniform(16.0))
+            .background(if liked {
+                Brush::Theme(ThemeBrush::Accent)
+            } else {
+                Brush::Solid(Color::transparent())
+            })
+            .opacity(if liked || like_hovered { 1.0 } else { 0.55 })
+            .vertical_alignment(VerticalAlignment::Center);
+        if !liked {
+            border = border
+                // A 2px stroke, the same weight as the icon's
+                // strokes, and the same color as the icon.
+                .border_thickness(2.0)
+                .border_brush(Brush::Theme(ThemeBrush::PrimaryText));
+        }
+        let hover_id_enter = hover_id.clone();
+        let like_button = border
+            .on_pointer_entered(context.callback(move |_info: PointerEventInfo| {
+                Message::LikeHover(Some(hover_id_enter.clone()))
+            }))
+            .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::LikeHover(None)))
+            .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                if info.is_left_button_pressed {
+                    toggle.clone()
+                } else {
+                    Message::Noop
+                }
+            }))
+            .content(
+                SymbolIcon::new()
+                    .symbol(if liked { Symbol::Accept } else { Symbol::Add })
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            )
+            .tooltip(if liked {
+                "Remove from liked"
+            } else {
+                "Add to liked"
+            });
+        items.push(KeyedView::new("like", like_button));
+    }
+    // The Pin button: a direct button in the action row (not
+    // buried in the More menu), so pinning an album / playlist /
+    // artist / song from its page is one click. An outline circle
+    // with a pin icon when not pinned; a filled accent circle when
+    // pinned. It sends the same TogglePin message the menus send.
+    let pin_target = target.clone();
+    let pin_button = Border::new()
+        .width(32.0)
+        .height(32.0)
+        .corner_radius(CornerRadius::uniform(16.0))
+        .background(if is_pinned {
+            Brush::Theme(ThemeBrush::Accent)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .border_thickness(if is_pinned { 0.0 } else { 2.0 })
+        .border_brush(Brush::Theme(ThemeBrush::PrimaryText))
+        .opacity(if is_pinned { 1.0 } else { 0.7 })
+        .vertical_alignment(VerticalAlignment::Center)
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                Message::TogglePin(pin_target.clone())
+            } else {
+                Message::Noop
+            }
+        }))
+        .content(
+            SymbolIcon::new()
+                .symbol(if is_pinned {
+                    Symbol::UnPin
+                } else {
+                    Symbol::Pin
+                })
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .tooltip(if is_pinned {
+            "Unpin from sidebar"
+        } else {
+            "Pin to sidebar"
+        });
+    items.push(KeyedView::new("download", download_button));
+    items.push(KeyedView::new("pin", pin_button));
+    items.push(KeyedView::new("more", more_button));
+
+    StackPanel::new()
+        .orientation(Orientation::Horizontal)
+        .spacing(16.0)
+        .keyed_children(items)
+}
+
+/// One song row: artwork, title/artist, and — unless `compact` —
+/// a favorite button and the duration. `queue` is the full list the
+/// row belongs to, so Play starts the queue at this song's position.
+/// The title and the artist line each wrap to at most 2 lines, the
+/// same rule as the media cards. The row gets a navigation-like
+/// hover background (a card fill while hovered). On hover, a circular
+/// play icon appears over the art (the same hover affordance as the
+/// media cards); clicking it plays the song. There is no permanent
+/// Play button — the hover icon is the play affordance.
+///
+/// In the full (details) form, the favorite button sits before the
+/// duration, with a gap between them, and only shows while the row
+/// is hovered. In the compact form (the Now Playing queue), there is
+/// no favorite button and no duration — just art, title/artist, and
+/// the hover background.
 pub fn song_row(
     song: &Song,
     queue: &[Song],
+    compact: bool,
     shell: &Shell,
     context: &mut ViewContext<Shell>,
 ) -> View {
     let index = queue.iter().position(|s| s.id == song.id).unwrap_or(0);
-    let liked = shell.library.is_liked(&song.id);
     let duration = song
         .duration
         .map(|d| fmt_time(d as f64))
         .unwrap_or_default();
+    let hovered = shell.hovered_card.as_deref() == Some(song.id.as_str());
 
-    let art_view: View = match art_url(&song.image, "150x150") {
-        Some(url) => image_from_url(&url)
+    let art_border: View = match art_url(&song.image, "150x150") {
+        Some(url) => Border::new()
             .width(48.0)
             .height(48.0)
-            .stretch(Stretch::UniformToFill)
-            .grid_column(0)
-            .into(),
+            .corner_radius(CornerRadius::uniform(4.0))
+            .content(
+                image_from_url(&url)
+                    .width(48.0)
+                    .height(48.0)
+                    .stretch(Stretch::UniformToFill),
+            ),
         None => Border::new()
             .width(48.0)
             .height(48.0)
-            .grid_column(0)
+            .corner_radius(CornerRadius::uniform(4.0))
             .content(
                 SymbolIcon::new()
                     .symbol(Symbol::Audio)
@@ -370,54 +925,269 @@ pub fn song_row(
                     .vertical_alignment(VerticalAlignment::Center),
             ),
     };
-
-    Grid::new()
-        .columns([
-            GridLength::Pixel(48.0),
-            GridLength::Star(1.0),
-            GridLength::Auto,
-            GridLength::Auto,
-            GridLength::Auto,
-        ])
-        .margin(4.0)
-        .children((
-            art_view,
-            StackPanel::new()
-                .margin(12.0)
+    let mut art_children: Vec<KeyedView> = vec![KeyedView::new("art", art_border)];
+    // A downloading song shows a circular progress ring with a
+    // download arrow in the middle, centered on the art.
+    if shell.catalog.is_downloading(&song.id) {
+        let fraction = shell.catalog.item_fraction(&song.id);
+        art_children.push(KeyedView::new(
+            "download",
+            download_progress_overlay(48.0, fraction),
+        ));
+    }
+    if hovered {
+        let play_queue = queue.to_vec();
+        art_children.push(KeyedView::new(
+            "play",
+            Border::new()
+                .width(32.0)
+                .height(32.0)
+                .corner_radius(CornerRadius::uniform(16.0))
+                .border_thickness(1.0)
+                .border_brush(Brush::Theme(ThemeBrush::CardStroke))
+                .background(Brush::Theme(ThemeBrush::CardBackground))
+                .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1)
-                .children((
-                    TextBlock::new()
-                        .text(song.name.clone())
-                        .font_size(14.0)
-                        .font_weight(FontWeight::SEMI_BOLD)
-                        .text_wrapping(TextWrapping::Wrap),
-                    TextBlock::new()
-                        .text(artist_names(song))
-                        .font_size(12.0)
-                        .opacity(0.7)
-                        .text_wrapping(TextWrapping::Wrap),
-                )),
+                .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+                    // Left-click only: a right-click must not start
+                    // playback — it falls through to the row's press
+                    // handler, which opens the context menu.
+                    if info.is_left_button_pressed {
+                        Message::PlaySong(play_queue.clone(), index)
+                    } else {
+                        Message::Noop
+                    }
+                }))
+                .content(SymbolIcon::new().symbol(Symbol::Play)),
+        ));
+    }
+    let art_view: View = Grid::new()
+        .width(48.0)
+        .height(48.0)
+        .grid_column(0)
+        .keyed_children(art_children);
+
+    // The subtitle (artist line). A downloaded song gets a filled
+    // circle check at the start of the subtitle.
+    let subtitle: View = if shell.catalog.is_downloaded(&song.id) {
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(4.0)
+            .children((
+                downloaded_badge(14.0),
+                TextBlock::new()
+                    .text(artist_names(song))
+                    .font_size(12.0)
+                    .opacity(0.7)
+                    .text_wrapping(TextWrapping::Wrap)
+                    .max_lines(2),
+            ))
+    } else {
+        TextBlock::new()
+            .text(artist_names(song))
+            .font_size(12.0)
+            .opacity(0.7)
+            .text_wrapping(TextWrapping::Wrap)
+            .max_lines(2)
+            .into()
+    };
+    let title_panel = StackPanel::new()
+        .margin(12.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(1)
+        .children((
+            TextBlock::new()
+                .text(song.name.clone())
+                .font_size(14.0)
+                .font_weight(FontWeight::SEMI_BOLD)
+                .text_wrapping(TextWrapping::Wrap)
+                .max_lines(2),
+            subtitle,
+        ));
+    // The full form: favorite before the duration, with a gap
+    // between them, and the favorite only shows while hovered. The
+    // compact form (Now Playing queue) has neither.
+    let (columns, row_children): (Vec<GridLength>, Vec<KeyedView>) = if compact {
+        (
+            vec![GridLength::Pixel(48.0), GridLength::Star(1.0)],
+            vec![
+                KeyedView::new("art", art_view),
+                KeyedView::new("title", title_panel),
+            ],
+        )
+    } else {
+        let mut children = vec![
+            KeyedView::new("art", art_view),
+            KeyedView::new("title", title_panel),
+        ];
+        if hovered {
+            children.push(KeyedView::new(
+                "favorite",
+                like_button(Some(song), 2, shell, context),
+            ));
+        }
+        children.push(KeyedView::new(
+            "duration",
             TextBlock::new()
                 .text(duration)
                 .font_size(12.0)
                 .opacity(0.7)
                 .vertical_alignment(VerticalAlignment::Center)
                 .margin(12.0)
-                .grid_column(2),
-            Button::new()
+                .grid_column(3),
+        ));
+        (
+            vec![
+                GridLength::Pixel(48.0),
+                GridLength::Star(1.0),
+                GridLength::Auto,
+                GridLength::Auto,
+            ],
+            children,
+        )
+    };
+
+    let hover_id = song.id.clone();
+    // Right-click opens the context menu for this song; a
+    // left-click on the row itself does nothing (only the play
+    // overlay and the like button act on left-click).
+    let menu_target = DetailsTarget {
+        kind: "song".to_string(),
+        id: song.id.clone(),
+        title: song.name.clone(),
+        subtitle: artist_names(song),
+        art: art_url(&song.image, "500x500"),
+    };
+    Border::new()
+        .background(if hovered {
+            Brush::Theme(ThemeBrush::CardBackground)
+        } else {
+            Brush::Solid(Color::transparent())
+        })
+        .corner_radius(CornerRadius::uniform(4.0))
+        .on_pointer_pressed(context.callback(move |info: PointerEventInfo| {
+            if info.is_right_button_pressed {
+                Message::OpenMenu(menu_target.clone(), info.window_x, info.window_y)
+            } else {
+                Message::Noop
+            }
+        }))
+        .on_pointer_entered(
+            context.callback(move |_info: PointerEventInfo| {
+                Message::CardHover(Some(hover_id.clone()))
+            }),
+        )
+        .on_pointer_exited(context.callback(|_info: PointerEventInfo| Message::CardHover(None)))
+        .content(
+            Grid::new()
+                .columns(columns)
                 .margin(4.0)
-                .grid_column(3)
-                .on_click(context.message(Message::ToggleLike(song.clone())))
-                .content(SymbolIcon::new().symbol(if liked {
-                    Symbol::Favorite
-                } else {
-                    Symbol::Add
-                })),
-            Button::new()
-                .margin(4.0)
-                .grid_column(4)
-                .on_click(context.message(Message::PlaySong(queue.to_vec(), index)))
-                .content(SymbolIcon::new().symbol(Symbol::Play)),
+                .keyed_children(row_children),
+        )
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton loading shapes.
+//
+// A skeleton is a set of rounded placeholder bars in the theme's card
+// color, the same size and layout as the content that will replace
+// it. They are static — no shimmer pulse, no fade: motion is not
+// supported, so the placeholders just sit at full opacity until the
+// real content replaces them.
+// ---------------------------------------------------------------------------
+
+/// The skeleton fill: a solid gray with real contrast against the
+/// page background in both themes. Checked with the WCAG contrast
+/// formula (page: dark #202020, light #F3F3F3): dark #4A4A4A is
+/// 1.84:1, light #BCBCBC is 1.71:1. The old CardBackground fill was
+/// ~1.1:1 in both themes — nearly invisible. `Theme::System` follows
+/// the app's dark-first default.
+pub fn skeleton_fill(theme: Theme) -> Brush {
+    match theme {
+        Theme::Light => Brush::Solid(Color::rgb(0xBC, 0xBC, 0xBC)),
+        _ => Brush::Solid(Color::rgb(0x4A, 0x4A, 0x4A)),
+    }
+}
+
+/// A rounded placeholder bar (a line of text, a heading, a button).
+pub fn skeleton_bar(width: f64, height: f64, shell: &Shell) -> View {
+    Border::new()
+        .width(width)
+        .height(height)
+        .corner_radius(CornerRadius::uniform(height / 2.0))
+        .background(skeleton_fill(shell.settings.theme))
+        .into()
+}
+
+/// A square placeholder for artwork (a card image, a details-page
+/// cover). `size` is the side length; corners are rounded 4px, the
+/// same as the real artwork it stands in for.
+pub fn skeleton_art(size: f64, shell: &Shell) -> View {
+    Border::new()
+        .width(size)
+        .height(size)
+        .corner_radius(CornerRadius::uniform(4.0))
+        .background(skeleton_fill(shell.settings.theme))
+        .into()
+}
+
+/// A media-card-shaped skeleton: 168px art + title + subtitle bars,
+/// same size and spacing as a real card.
+pub fn skeleton_card(shell: &Shell) -> View {
+    StackPanel::new().spacing(8.0).children((
+        skeleton_art(168.0, shell),
+        skeleton_bar(120.0, 12.0, shell),
+        skeleton_bar(84.0, 10.0, shell),
+    ))
+}
+
+/// A song-row-shaped skeleton: 48px art + title/artist bars.
+pub fn skeleton_row(shell: &Shell) -> View {
+    StackPanel::new()
+        .orientation(Orientation::Horizontal)
+        .spacing(12.0)
+        .margin(4.0)
+        .children((
+            Border::new()
+                .width(48.0)
+                .height(48.0)
+                .corner_radius(CornerRadius::uniform(4.0))
+                .background(skeleton_fill(shell.settings.theme)),
+            StackPanel::new()
+                .vertical_alignment(VerticalAlignment::Center)
+                .spacing(8.0)
+                .children((
+                    skeleton_bar(180.0, 12.0, shell),
+                    skeleton_bar(120.0, 10.0, shell),
+                )),
         ))
+}
+
+/// A section-shaped skeleton: the section's REAL heading (the
+/// layout's static text) + one row of `cards` skeleton cards, 12px
+/// apart — the same shape as the real section, so the placeholder
+/// reads as the page, not a generic stack of bars.
+pub fn skeleton_section(shell: &Shell, title: &str, cards: usize) -> View {
+    let mut card_views: Vec<KeyedView> = Vec::new();
+    for i in 0..cards {
+        card_views.push(KeyedView::new(format!("card{i}"), skeleton_card(shell)));
+    }
+    StackPanel::new().spacing(8.0).children((
+        section_header(title),
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(12.0)
+            .keyed_children(card_views),
+    ))
+}
+
+/// A button-shaped placeholder (Play / Like), the same rounded
+/// rectangle a real Button is — corner radius 4, not a pill.
+pub fn skeleton_button(width: f64, height: f64, shell: &Shell) -> View {
+    Border::new()
+        .width(width)
+        .height(height)
+        .corner_radius(CornerRadius::uniform(4.0))
+        .background(skeleton_fill(shell.settings.theme))
+        .into()
 }

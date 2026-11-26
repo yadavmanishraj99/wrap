@@ -37,7 +37,7 @@ pub fn view(shell: &Shell, context: &mut ViewContext<Shell>) -> View {
         .map(|song| {
             KeyedView::new(
                 song.id.clone(),
-                views::song_row(song, queue, shell, context),
+                views::song_row(song, queue, true, shell, context),
             )
         })
         .collect();

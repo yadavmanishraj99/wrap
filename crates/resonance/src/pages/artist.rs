@@ -18,6 +18,8 @@ pub fn view(
             .margin(24.0)
             .into();
     };
+    let liked = shell.catalog.is_artist_liked(&artist.id);
+    let artist_for_like = artist.clone();
     let art_content: View = match &content.art {
         Some(url) => views::image_from_url(url)
             .width(200.0)
@@ -58,22 +60,26 @@ pub fn view(
                         .font_size(14.0)
                         .opacity(0.7)
                         .text_wrapping(TextWrapping::Wrap),
-                    Button::new()
-                        .is_enabled(!content.songs.is_empty())
-                        .on_click(context.message(Message::PlaySong(content.songs.clone(), 0)))
-                        .content(
-                            StackPanel::new()
-                                .orientation(Orientation::Horizontal)
-                                .spacing(8.0)
-                                .children((
-                                    SymbolIcon::new().symbol(Symbol::Play),
-                                    TextBlock::new().text("Play"),
-                                )),
-                        ),
+                    views::details_action_row(
+                        &content.songs,
+                        Some((
+                            liked,
+                            Message::ToggleLikeArtist(artist_for_like),
+                            artist.id.clone(),
+                        )),
+                        target,
+                        shell,
+                        context,
+                    ),
                 )),
         ));
 
     let mut sections: Vec<KeyedView> = vec![KeyedView::new("header", header)];
+    // While this artist's top songs are downloading, show the
+    // overall progress above the song list.
+    if let Some(progress) = views::collection_download_progress(&target.id, shell) {
+        sections.push(KeyedView::new("download", progress));
+    }
     if !content.songs.is_empty() {
         let rows: Vec<KeyedView> = content
             .songs
@@ -81,7 +87,7 @@ pub fn view(
             .map(|song| {
                 KeyedView::new(
                     song.id.clone(),
-                    views::song_row(song, &content.songs, shell, context),
+                    views::song_row(song, &content.songs, false, shell, context),
                 )
             })
             .collect();
